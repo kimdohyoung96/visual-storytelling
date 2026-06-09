@@ -1,0 +1,36 @@
+llm:
+  provider: openai_compatible
+  model: ${OPENAI_MODEL:openai/gpt-4o-mini}
+  base_url: ${OPENAI_BASE_URL:https://openrouter.ai/api/v1}
+  api_key_env: OPENAI_API_KEY
+  temperature: 0.8
+  max_tokens: 2500
+
+vlm:
+  provider: openai_compatible
+  model: ${OPENAI_VLM_MODEL:openai/gpt-4o-mini}
+  base_url: ${OPENAI_BASE_URL:https://openrouter.ai/api/v1}
+  api_key_env: OPENAI_API_KEY
+
+image_understanding:
+  provider: llm_caption
+  caption_model: Salesforce/blip-image-captioning-base
+
+image_generator:
+  provider: sdxl #placeholder
+  model_id: stabilityai/stable-diffusion-xl-base-1.0
+  device: cuda
+  width: 1024
+  height: 1024
+  num_inference_steps: 40 #30
+  guidance_scale: 7.0
+  num_candidates_per_frame: 2 #1
+  num_ending_candidates: 4
+
+pipeline:
+  memory_strategy: multi_slot
+  include_input_image_summary: true
+
+evaluation:
+  use_vlm: true
+  save_contact_sheet: true
