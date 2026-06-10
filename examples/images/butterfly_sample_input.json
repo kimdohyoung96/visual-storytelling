@@ -1,0 +1,15 @@
+{
+  "image_path": null,
+  "text_prompt": "A poor woodcutter enters a deep forest and loses his axe near a river. The story should feel like a cinematic folk tale where honesty changes his fate.",
+  "protagonist": "woodcutter",
+  "target_ending_emotion": "happy",
+  "genre": "folk tale",
+  "style": "cinematic storybook illustration",
+  "num_frames": 6,
+  "language": "English",
+  "outfit": "simple brown work shirt, worn vest, dark trousers, leather boots",
+  "signature_items": [
+    "wooden axe handle",
+    "rope belt"
+  ]
+}

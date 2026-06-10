@@ -1,0 +1,10 @@
+{
+  "image_path": "examples/images/Woodcutter_1.png",
+  "text_prompt": "A Woodcutter and a Fairy are about to love in a forest.",
+  "protagonist": "Woodcutter",
+  "target_ending_emotion": "happy",
+  "genre": "fable",
+  "style": "cinematic storybook illustration",
+  "num_frames": 6,
+  "language": "English"
+}
