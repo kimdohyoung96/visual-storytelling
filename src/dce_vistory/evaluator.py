@@ -15,14 +15,24 @@ from .utils import extract_json, make_contact_sheet
 
 
 def compact_storyboard(storyboard: List[StoryboardFrame]) -> List[Dict[str, Any]]:
-    return [{
-        "frame_id": f.frame_id, "caption": f.caption, "narrative_function": f.narrative_function,
-        "event": f.event, "emotion": f.emotion, "emotion_intensity": f.emotion_intensity,
-        "scene_location": getattr(f, "scene_location", ""), "weather": getattr(f, "weather", ""),
-        "atmosphere": getattr(f, "atmosphere", ""), "shot_type": getattr(f, "shot_type", ""),
-        "color_palette": getattr(f, "color_palette", ""), "must_show": getattr(f, "must_show", []),
-        "emotion_evidence": getattr(f, "emotion_evidence", []),
-    } for f in storyboard]
+    return [
+        {
+            "frame_id": f.frame_id,
+            "caption": f.caption,
+            "narrative_function": f.narrative_function,
+            "event": f.event,
+            "emotion": f.emotion,
+            "emotion_intensity": f.emotion_intensity,
+            "scene_location": getattr(f, "scene_location", ""),
+            "weather": getattr(f, "weather", ""),
+            "atmosphere": getattr(f, "atmosphere", ""),
+            "shot_type": getattr(f, "shot_type", ""),
+            "color_palette": getattr(f, "color_palette", ""),
+            "must_show": getattr(f, "must_show", []),
+            "emotion_evidence": getattr(f, "emotion_evidence", []),
+        }
+        for f in storyboard
+    ]
 
 
 def image_quality_proxy(image_path: str) -> float:
@@ -43,7 +53,9 @@ def image_quality_proxy(image_path: str) -> float:
 def colorfulness_score(image_path: str) -> float:
     try:
         img = np.array(Image.open(image_path).convert("RGB")).astype(np.float32)
-        r, g, b = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+        r = img[:, :, 0]
+        g = img[:, :, 1]
+        b = img[:, :, 2]
         rg = np.abs(r - g)
         yb = np.abs(0.5 * (r + g) - b)
         colorfulness = math.sqrt(np.std(rg) ** 2 + np.std(yb) ** 2) + 0.3 * math.sqrt(np.mean(rg) ** 2 + np.mean(yb) ** 2)
@@ -59,16 +71,38 @@ class DCEQAEvaluator:
         self.use_vlm = use_vlm
         self.save_contact_sheet = save_contact_sheet
 
-    def generate_questions(self, dce_plan: DCEPlan, emotion_arc: EmotionArc, storyboard: List[StoryboardFrame]) -> Dict[str, Any]:
+    def generate_questions(
+        self,
+        dce_plan: DCEPlan,
+        emotion_arc: EmotionArc,
+        storyboard: List[StoryboardFrame],
+    ) -> Dict[str, Any]:
         try:
-            text = self.llm.generate(SYSTEM_NARRATIVE, eval_questions_prompt(asdict(dce_plan), asdict(emotion_arc), compact_storyboard(storyboard)), temperature=0.0, max_tokens=1500)
+            text = self.llm.generate(
+                SYSTEM_NARRATIVE,
+                eval_questions_prompt(asdict(dce_plan), asdict(emotion_arc), compact_storyboard(storyboard)),
+                temperature=0.0,
+                max_tokens=1500,
+            )
             return extract_json(text)
         except Exception:
-            return {"global_questions": ["emotion visibility", "emotion cause visibility", "event alignment", "world fidelity", "colorfulness", "identity consistency"], "frame_questions": {}, "ending_questions": []}
+            return {
+                "global_questions": [
+                    "emotion visibility",
+                    "emotion cause visibility",
+                    "event alignment",
+                    "world fidelity",
+                    "colorfulness",
+                    "identity consistency",
+                ],
+                "frame_questions": {},
+                "ending_questions": [],
+            }
 
     def _vlm_frame_eval(self, frame: StoryboardFrame, candidate: CandidateImage) -> Dict[str, Any]:
         if not self.use_vlm:
             return {}
+
         prompt = f"""
 Evaluate the image for this storyboard frame.
 
@@ -98,14 +132,30 @@ Return JSON only:
   "reason": "short reason"
 }}
 """.strip()
+
         try:
-            data = extract_json(self.vlm.generate_with_images(SYSTEM_VLM, prompt, [candidate.image_path], temperature=0.0, max_tokens=600))
+            data = extract_json(
+                self.vlm.generate_with_images(
+                    SYSTEM_VLM,
+                    prompt,
+                    [candidate.image_path],
+                    temperature=0.0,
+                    max_tokens=600,
+                )
+            )
             return data
         except Exception as e:
             return {"vlm_error": str(e)[:500]}
 
-    def rank_frame_candidates(self, frame: StoryboardFrame, dce_plan: DCEPlan, candidates: List[CandidateImage], is_ending: bool = False) -> List[CandidateImage]:
+    def rank_frame_candidates(
+        self,
+        frame: StoryboardFrame,
+        dce_plan: DCEPlan,
+        candidates: List[CandidateImage],
+        is_ending: bool = False,
+    ) -> List[CandidateImage]:
         ranked = []
+
         for c in candidates:
             scores = {
                 "image_quality": image_quality_proxy(c.image_path),
@@ -116,35 +166,77 @@ Return JSON only:
                 "scene_alignment": 0.72,
                 "event_alignment": 0.72,
             }
+
             vlm_scores = self._vlm_frame_eval(frame, c)
             if vlm_scores and "vlm_error" not in vlm_scores:
-                for k in ["emotion_visibility", "emotion_cause_visibility", "scene_alignment", "event_alignment", "identity_consistency", "colorfulness"]:
+                for k in [
+                    "emotion_visibility",
+                    "emotion_cause_visibility",
+                    "scene_alignment",
+                    "event_alignment",
+                    "identity_consistency",
+                    "colorfulness",
+                ]:
                     if k in vlm_scores:
                         scores[k] = float(vlm_scores[k])
                 c.notes["vlm_reason"] = vlm_scores.get("reason", "")
             elif vlm_scores and "vlm_error" in vlm_scores:
                 c.notes["vlm_error"] = vlm_scores["vlm_error"]
+
             if is_ending:
-                overall = 0.20 * scores["identity_consistency"] + 0.16 * scores["image_quality"] + 0.24 * scores["emotion_visibility"] + 0.16 * scores["emotion_cause_visibility"] + 0.10 * scores["scene_alignment"] + 0.08 * scores["event_alignment"] + 0.06 * scores["colorfulness"]
+                overall = (
+                    0.20 * scores["identity_consistency"]
+                    + 0.16 * scores["image_quality"]
+                    + 0.24 * scores["emotion_visibility"]
+                    + 0.16 * scores["emotion_cause_visibility"]
+                    + 0.10 * scores["scene_alignment"]
+                    + 0.08 * scores["event_alignment"]
+                    + 0.06 * scores["colorfulness"]
+                )
             else:
-                overall = 0.22 * scores["identity_consistency"] + 0.16 * scores["image_quality"] + 0.22 * scores["emotion_visibility"] + 0.16 * scores["emotion_cause_visibility"] + 0.12 * scores["scene_alignment"] + 0.07 * scores["event_alignment"] + 0.05 * scores["colorfulness"]
+                overall = (
+                    0.22 * scores["identity_consistency"]
+                    + 0.16 * scores["image_quality"]
+                    + 0.22 * scores["emotion_visibility"]
+                    + 0.16 * scores["emotion_cause_visibility"]
+                    + 0.12 * scores["scene_alignment"]
+                    + 0.07 * scores["event_alignment"]
+                    + 0.05 * scores["colorfulness"]
+                )
+
             scores["overall"] = round(float(overall), 4)
             c.scores.update(scores)
             ranked.append(c)
+
         return sorted(ranked, key=lambda x: x.scores.get("overall", 0.0), reverse=True)
 
-    def rerank_ending_candidates(self, final_frame: StoryboardFrame, dce_plan: DCEPlan, candidates: List[CandidateImage]) -> List[CandidateImage]:
+    def rerank_ending_candidates(
+        self,
+        final_frame: StoryboardFrame,
+        dce_plan: DCEPlan,
+        candidates: List[CandidateImage],
+    ) -> List[CandidateImage]:
         return self.rank_frame_candidates(final_frame, dce_plan, candidates, is_ending=True)
 
-    def evaluate_sequence(self, dce_plan: DCEPlan, emotion_arc: EmotionArc, storyboard: List[StoryboardFrame], images: List[CandidateImage], questions: Dict[str, Any], out_dir: str | Path | None = None) -> Dict[str, Any]:
+    def evaluate_sequence(
+        self,
+        dce_plan: DCEPlan,
+        emotion_arc: EmotionArc,
+        storyboard: List[StoryboardFrame],
+        images: List[CandidateImage],
+        questions: Dict[str, Any],
+        out_dir: str | Path | None = None,
+    ) -> Dict[str, Any]:
         if not images:
             return {"warning": "No images"}
+
         contact_sheet_path = None
         if self.save_contact_sheet and out_dir:
             try:
                 contact_sheet_path = make_contact_sheet([x.image_path for x in images], Path(out_dir) / "contact_sheet.png")
             except Exception:
                 contact_sheet_path = None
+
         n = max(1, len(images))
         data = {
             "image_quality": round(sum(image_quality_proxy(x.image_path) for x in images) / n, 4),

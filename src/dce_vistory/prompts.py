@@ -2,29 +2,35 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+
 SYSTEM_NARRATIVE = """
 You are a research-grade multimodal narrative planner.
+You must explicitly model protagonist desire, conflict, event progression, emotion change, and target ending emotion.
+You must also plan visible external-world evidence for each frame: background, situation, weather, time of day, lighting, atmosphere, and symbolic objects.
 Return concise valid JSON whenever JSON is requested.
 """.strip()
 
+
 SYSTEM_VLM = """
 You are a strict visual narrative evaluator.
+Evaluate whether the image clearly shows the target emotion, event, protagonist identity, world state, colorfulness, and story alignment.
 Return concise valid JSON only.
 """.strip()
 
+
 QUALITY_SUFFIX = (
-    "full-color cinematic storybook illustration, rich natural color rendering, "
-    "emotionally meaningful color palette, clear emotional storytelling, strong facial acting, "
-    "expressive body language, coherent anatomy, high detail environment, visually readable action, "
-    "cinematic lighting, sharp focus, professional illustration quality"
+    "full-color cinematic storybook illustration, rich natural color rendering, emotionally meaningful color palette, "
+    "clear emotional storytelling, strong facial acting, expressive body language, coherent anatomy, high detail environment, "
+    "visually readable action, cinematic lighting, sharp focus, professional illustration quality"
 )
 
+
 NEGATIVE_PROMPT = (
-    "monochrome, black and white, grayscale, pencil sketch, charcoal sketch, line art only, "
-    "low quality, blurry, bad anatomy, extra fingers, deformed hands, distorted face, "
-    "emotionless face, stiff pose, empty background, washed-out colors, flat lighting, "
-    "weak expression, colorless image, random text, watermark, logo, cropped face"
+    "monochrome, black and white, grayscale, pencil sketch, charcoal sketch, line art only, low quality, blurry, "
+    "bad anatomy, extra fingers, deformed hands, distorted face, emotionless face, stiff pose, empty background, "
+    "washed-out colors, flat lighting, weak expression, colorless image, random text, watermark, logo, cropped face"
 )
+
 
 EMOTION_RENDER_BOOK: Dict[str, Dict[str, str]] = {
     "joy": {
@@ -135,9 +141,8 @@ def get_emotion_rule(emotion: str) -> Dict[str, str]:
 def emotion_rule_text(emotion: str) -> str:
     r = get_emotion_rule(emotion)
     return (
-        f"Facial expression: {r['face']}; Body posture: {r['body']}; "
-        f"Lighting: {r['lighting']}; Color palette: {r['palette']}; "
-        f"Weather/world: {r['weather']}; Composition: {r['composition']}"
+        f"Facial expression: {r['face']}; Body posture: {r['body']}; Lighting: {r['lighting']}; "
+        f"Color palette: {r['palette']}; Weather/world: {r['weather']}; Composition: {r['composition']}"
     )
 
 
@@ -174,13 +179,6 @@ def choose_camera_distance(shot_type: str) -> str:
     if "wide" in st:
         return "wide"
     return "medium"
-
-
-def color_instruction(frame: Any) -> str:
-    return (
-        f"Use a full-color palette. Dominant palette: {getattr(frame, 'color_palette', 'rich natural full color')}. "
-        "The illustration must be richly colored and must not be monochrome, grayscale, black-and-white, pencil-only, or sketch-only."
-    )
 
 
 def image_understanding_prompt(image_path: str, sample: dict) -> str:
@@ -226,9 +224,6 @@ visual_symbols: object
 world_context: object with keys such as region, season, time_of_day, weather_prior, atmosphere_prior, environment_prior, social_context
 character_profiles: list of objects, each with:
   name, role, age_group, gender, face, hair, body, outfit, signature_items, color_palette, identity_anchor_prompt
-
-The protagonist profile must be visually specific enough to preserve the same identity across all frames.
-The world_context should be specific enough to ground background, weather, and situational details in later frames.
 """.strip()
 
 
@@ -322,9 +317,9 @@ Important:
 def frame_prompt(frame: dict, dce_plan: dict, emotion_arc: dict, memory: dict, style: str, input_image_summary: dict | None) -> str:
     emotion = frame.get("emotion", "")
     env_details = ", ".join(frame.get("environment_details", []))
-    support_cast = ", ".join(frame.get("supporting_cast", []))
     must_show = ", ".join(frame.get("must_show", []))
     emotion_evidence = ", ".join(frame.get("emotion_evidence", []))
+
     return f"""
 Generate one frame of a visual story.
 
@@ -345,7 +340,6 @@ Desire link: {frame.get('desire_link')}
 Conflict level: {frame.get('conflict_level')}
 Visual focus: {frame.get('visual_focus')}
 Key objects: {frame.get('key_objects')}
-Supporting cast: {support_cast}
 
 [EMOTION - MUST BE IMMEDIATELY READABLE]
 Target emotion: {emotion} (intensity {frame.get('emotion_intensity')}/5)
