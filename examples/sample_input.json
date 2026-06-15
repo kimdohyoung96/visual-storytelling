@@ -1,0 +1,10 @@
+{
+  "image_path": null,
+  "text_prompt": "A rabbit and a turtle are about to race in a forest. The story should feel like a cinematic fable.",
+  "protagonist": "turtle",
+  "target_ending_emotion": "happy",
+  "genre": "fable",
+  "style": "cinematic storybook illustration",
+  "num_frames": 6,
+  "language": "English"
+}
