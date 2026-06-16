@@ -9,9 +9,12 @@ from .latent_schema import CharacterLatent, WorldLatent, EmotionLatent, VisualCo
 
 class ButterflyController:
     """
-    Decoder-Encoder-Decoder controller.
+    DCEE-aware Decoder-Encoder-Decoder visual controller.
 
-    It builds a VisualControlPacket that is later converted into SDXL cross-attention adapter tokens.
+    This controller converts a frame-level DCEE storyboard state into a VisualControlPacket.
+    It keeps the original class name for backward compatibility, but the packet now explicitly
+    separates Character, World, Emotion, and Event controls, where Event is the causal visual
+    evidence that links Conflict to Ending Emotion.
     """
 
     def __init__(self, quality_suffix: str, negative_prompt: str, num_hypotheses: int = 3):
@@ -35,14 +38,25 @@ class ButterflyController:
                 identity_prompt=f"same protagonist identity: {getattr(seed, 'protagonist', 'protagonist')}",
             )
 
+        if hasattr(profile, "to_prompt"):
+            try:
+                identity_prompt = profile.to_prompt()
+            except Exception:
+                identity_prompt = str(getattr(profile, "identity_anchor_prompt", getattr(profile, "name", "protagonist")))
+        else:
+            identity_prompt = "; ".join(
+                str(getattr(profile, k, "")) for k in ["name", "role", "face", "hair", "body", "outfit", "identity_anchor_prompt"]
+                if getattr(profile, k, "")
+            )
+
         return CharacterLatent(
-            name=profile.name,
-            role=profile.role,
-            identity_prompt=profile.to_prompt(),
-            outfit_prompt=profile.outfit,
-            signature_items=profile.signature_items,
+            name=getattr(profile, "name", getattr(seed, "protagonist", "protagonist")),
+            role=getattr(profile, "role", "protagonist"),
+            identity_prompt=identity_prompt,
+            outfit_prompt=getattr(profile, "outfit", ""),
+            signature_items=getattr(profile, "signature_items", []) or [],
             reference_image=None,
-            negative_prompt=profile.negative_identity_prompt,
+            negative_prompt=getattr(profile, "negative_identity_prompt", "different identity, changed face, changed outfit, inconsistent character"),
         )
 
     def create_packet(self, frame: Any, seed: Any, dce_plan: Any, memory: Dict[str, Any], style: str, previous_frame: Any = None) -> VisualControlPacket:
@@ -51,14 +65,14 @@ class ButterflyController:
 
         world = WorldLatent(
             scene_location=getattr(frame, "scene_location", "") or getattr(seed, "setting", ""),
-            time_of_day=getattr(frame, "time_of_day", "") or "cinematic golden hour",
-            weather=getattr(frame, "weather", "") or world_rule["weather"],
-            atmosphere=getattr(frame, "atmosphere", "") or world_rule["environment"],
+            time_of_day=getattr(frame, "time_of_day", "") or "cinematic story time",
+            weather=getattr(frame, "weather", "") or world_rule.get("weather", "cinematic weather"),
+            atmosphere=getattr(frame, "atmosphere", "") or world_rule.get("environment", "emotionally meaningful atmosphere"),
             environment_details=list(getattr(frame, "environment_details", []) or []) + [
-                world_rule["environment"],
-                f"lighting: {world_rule['lighting']}",
-                f"color palette: {world_rule['color']}",
-                f"composition: {world_rule['composition']}",
+                world_rule.get("environment", "story-relevant environment"),
+                f"lighting: {getattr(frame, 'lighting_style', '') or world_rule.get('lighting', '')}",
+                f"color palette: {getattr(frame, 'color_palette', '') or world_rule.get('color', '')}",
+                f"composition: {getattr(frame, 'composition_rule', '') or world_rule.get('composition', '')}",
             ],
             scene_transition=getattr(frame, "scene_transition", ""),
             symbolic_objects=getattr(seed, "visual_symbols", {}) if hasattr(seed, "visual_symbols") else {},
@@ -70,18 +84,18 @@ class ButterflyController:
             delta_from_previous=getattr(frame, "emotion_delta", ""),
             facial_rule=getattr(frame, "facial_cue", ""),
             body_rule=getattr(frame, "body_cue", ""),
-            lighting_rule=world_rule["lighting"],
-            color_rule=world_rule["color"],
-            composition_rule=getattr(frame, "composition_rule", "") or world_rule["composition"],
+            lighting_rule=getattr(frame, "lighting_style", "") or world_rule.get("lighting", ""),
+            color_rule=getattr(frame, "color_palette", "") or world_rule.get("color", ""),
+            composition_rule=getattr(frame, "composition_rule", "") or world_rule.get("composition", ""),
         )
 
         intensity = max(1, min(5, emotion.intensity))
         emotion_w = 0.20 + 0.08 * intensity
         adapter_weights = {
-            "character_adapter": 0.35,
-            "world_adapter": 0.25,
+            "character_adapter": 0.32,
+            "world_adapter": 0.23,
             "emotion_adapter": emotion_w,
-            "event_adapter": max(0.10, 1.0 - (0.35 + 0.25 + emotion_w)),
+            "event_adapter": max(0.15, 1.0 - (0.32 + 0.23 + emotion_w)),
         }
 
         character_text = character.identity_prompt
@@ -91,7 +105,11 @@ class ButterflyController:
             character_text += "; signature items: " + ", ".join(character.signature_items)
 
         event_text = (
-            f"event: {getattr(frame, 'event', '')}; "
+            f"DCEE visible event: {getattr(frame, 'event', '')}; "
+            f"causal role: {getattr(frame, 'event_causal_role', '')}; "
+            f"event grounding: {getattr(frame, 'event_grounding', '')}; "
+            f"emotion evidence: {getattr(frame, 'emotion_evidence', [])}; "
+            f"must show: {getattr(frame, 'must_show', [])}; "
             f"visual focus: {getattr(frame, 'visual_focus', '')}; "
             f"key objects: {', '.join(getattr(frame, 'key_objects', []) or [])}"
         )
@@ -106,36 +124,41 @@ class ButterflyController:
 {character_text}
 Preserve the same identity, face, body type, outfit, and signature items across frames.
 
-[EVENT]
+[DCEE EVENT - MUST BE VISIBLE]
 {event_text}
 
 [WORLD / BACKGROUND / SITUATION]
 {world_text}
 
-[EMOTION]
+[EMOTION - MUST BE CAUSED BY THE EVENT]
 {emotion_text}
+The image must show not only what the protagonist feels, but also why the event makes the protagonist feel it.
 
-[MEMORY]
+[SALIENT CAUSAL MEMORY]
 {memory}
 
 [QUALITY]
 {self.quality_suffix}
 
-Create a coherent cinematic storybook illustration. The protagonist emotion must be visible,
-but the surrounding world must also clearly show the story situation, weather, time, atmosphere,
-and environmental context.
+Create a coherent full-color cinematic storybook illustration. The planned event must be visible,
+the emotion must be readable, and the visual evidence connecting event to emotion must be present.
 """.strip()
 
         return VisualControlPacket(
             frame_id=int(getattr(frame, "frame_id", 0)),
             positive_prompt=positive_prompt,
-            negative_prompt=self.negative_prompt + "; " + character.negative_prompt,
+            negative_prompt=self.negative_prompt + "; " + character.negative_prompt + "; missing event, missing emotion cause, portrait only",
             adapter_weights=adapter_weights,
             control_metadata={
                 "character_text": character_text,
                 "world_text": world_text,
                 "emotion_text": emotion_text,
                 "event_text": event_text,
+                "dcee_event_text": event_text,
+                "event_causal_role": getattr(frame, "event_causal_role", ""),
+                "event_grounding": getattr(frame, "event_grounding", ""),
+                "emotion_evidence": getattr(frame, "emotion_evidence", []),
+                "must_show": getattr(frame, "must_show", []),
                 "world": asdict(world),
                 "emotion": asdict(emotion),
                 "character": asdict(character),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Dict, List
 
@@ -11,7 +12,75 @@ from .latent_schema import VisualControlPacket
 from .schema import CandidateImage
 
 
+def _clean_text(x: str | None) -> str:
+    if not x:
+        return ""
+    x = str(x).replace("\n", " ")
+    x = re.sub(r"\s+", " ", x).strip()
+    return x
+
+
+def _limit_words(x: str | None, max_words: int = 55) -> str:
+    x = _clean_text(x)
+    words = x.split()
+    if len(words) <= max_words:
+        return x
+    return " ".join(words[:max_words])
+
+
+def _compact_prompt_from_packet(packet: VisualControlPacket) -> str:
+    """
+    CLIP 77-token 제한 때문에 긴 story prompt를 그대로 넣지 않는다.
+    긴 정보는 adapter branch의 control text로 보내고,
+    base prompt는 이미지 생성에 가장 중요한 내용만 앞쪽에 압축한다.
+    """
+    meta = packet.control_metadata or {}
+
+    character_text = _limit_words(
+        meta.get("character_text", json.dumps(meta.get("character", {}), ensure_ascii=False)),
+        18,
+    )
+    emotion_text = _limit_words(
+        meta.get("emotion_text", json.dumps(meta.get("emotion", {}), ensure_ascii=False)),
+        24,
+    )
+    world_text = _limit_words(
+        meta.get("world_text", json.dumps(meta.get("world", {}), ensure_ascii=False)),
+        20,
+    )
+    event_text = _limit_words(meta.get("event_text", ""), 24)
+
+    prompt = (
+        "full-color cinematic storybook illustration, rich natural colors, "
+        "expressive face, expressive body language, clear emotional storytelling, "
+        f"{emotion_text}, {event_text}, {world_text}, {character_text}, "
+        "detailed background, cinematic lighting, sharp focus"
+    )
+    return _limit_words(prompt, 68)
+
+
+def _compact_negative_prompt(packet: VisualControlPacket) -> str:
+    base = (
+        "monochrome, grayscale, black and white, pencil sketch, charcoal sketch, line art only, "
+        "colorless image, emotionless face, weak expression, stiff pose, empty background, "
+        "low quality, blurry, bad anatomy, distorted face, watermark, text"
+    )
+    extra = _limit_words(getattr(packet, "negative_prompt", ""), 25)
+    return _limit_words(base + ", " + extra, 70)
+
+
 class SDXLButterflyCrossAttentionGenerator:
+    """
+    Fixes:
+    1. VAE dtype mismatch:
+       Do NOT force self.pipe.vae.to(torch.float32) while latents are fp16.
+       This avoids:
+       RuntimeError: Input type Half and bias type float should be the same
+
+    2. CLIP 77-token warning:
+       Use compact base prompt. Send compact branch texts to adapter modules.
+    """
+
     def __init__(
         self,
         model_id: str = "stabilityai/stable-diffusion-xl-base-1.0",
@@ -36,13 +105,11 @@ class SDXLButterflyCrossAttentionGenerator:
         self.num_inference_steps = int(num_inference_steps)
         self.guidance_scale = float(guidance_scale)
         self.seed = int(seed)
-
-        dtype = torch.float16 if device.startswith("cuda") else torch.float32
-        self.dtype = dtype
+        self.dtype = torch.float16 if device.startswith("cuda") else torch.float32
 
         self.pipe = StableDiffusionXLPipeline.from_pretrained(
             model_id,
-            torch_dtype=dtype,
+            torch_dtype=self.dtype,
             use_safetensors=True,
         )
 
@@ -51,10 +118,9 @@ class SDXLButterflyCrossAttentionGenerator:
         else:
             self.pipe.to(device)
 
-        try:
-            self.pipe.vae.to(torch.float32)
-        except Exception:
-            pass
+        # 중요:
+        # self.pipe.vae.to(torch.float32)를 호출하지 않는다.
+        # fp16 latent와 fp32 VAE bias가 섞여 decode 단계에서 터질 수 있다.
 
         try:
             self.pipe.vae.enable_slicing()
@@ -71,7 +137,7 @@ class SDXLButterflyCrossAttentionGenerator:
             event_tokens=event_tokens,
         ).to(device)
 
-        if dtype == torch.float16:
+        if self.dtype == torch.float16:
             self.adapter_stack = self.adapter_stack.half()
 
         if adapter_ckpt:
@@ -92,16 +158,29 @@ class SDXLButterflyCrossAttentionGenerator:
         return result
 
     def _encode_control(self, text: str) -> torch.Tensor:
+        text = _limit_words(text, 70)
         prompt_embeds, _, _, _ = self._encode_prompt(text, negative_prompt="", do_cfg=False)
         return prompt_embeds
 
     def _control_texts_from_packet(self, packet: VisualControlPacket) -> Dict[str, str]:
         meta = packet.control_metadata or {}
         return {
-            "character_adapter": meta.get("character_text", json.dumps(meta.get("character", {}), ensure_ascii=False)),
-            "world_adapter": meta.get("world_text", json.dumps(meta.get("world", {}), ensure_ascii=False)),
-            "emotion_adapter": meta.get("emotion_text", json.dumps(meta.get("emotion", {}), ensure_ascii=False)),
-            "event_adapter": meta.get("event_text", packet.positive_prompt[:1200]),
+            "character_adapter": _limit_words(
+                meta.get("character_text", json.dumps(meta.get("character", {}), ensure_ascii=False)),
+                70,
+            ),
+            "world_adapter": _limit_words(
+                meta.get("world_text", json.dumps(meta.get("world", {}), ensure_ascii=False)),
+                70,
+            ),
+            "emotion_adapter": _limit_words(
+                meta.get("emotion_text", json.dumps(meta.get("emotion", {}), ensure_ascii=False)),
+                70,
+            ),
+            "event_adapter": _limit_words(
+                meta.get("event_text", getattr(packet, "positive_prompt", "")),
+                70,
+            ),
         }
 
     @torch.no_grad()
@@ -115,27 +194,12 @@ class SDXLButterflyCrossAttentionGenerator:
         out_dir.mkdir(parents=True, exist_ok=True)
         candidates: List[CandidateImage] = []
 
-        strong_positive = (
-            packet.positive_prompt
-            + "\n\nIMPORTANT VISUAL REQUIREMENTS:\n"
-            + "- Render this as a FULL-COLOR cinematic storybook illustration.\n"
-            + "- Never produce monochrome, grayscale, black-and-white, pencil-only, or sketch-only output.\n"
-            + "- Use rich natural colors and emotionally meaningful color palette.\n"
-            + "- The protagonist emotion must be immediately readable from face, eyes, body posture, lighting, color, and environment.\n"
-            + "- The scene must clearly show the current story event and the visual reason for the protagonist emotion.\n"
-            + "- Background, weather, time of day, and atmosphere must match the story frame.\n"
-            + "- Avoid plain portrait-only composition unless the frame explicitly requires close-up emotional reaction.\n"
-        )
-
-        strong_negative = (
-            packet.negative_prompt
-            + ", monochrome, grayscale, black and white, pencil sketch, charcoal sketch, line art only, "
-            + "emotionless face, flat expression, stiff pose, flat lighting, colorless image, empty background, portrait only"
-        )
+        compact_positive = _compact_prompt_from_packet(packet)
+        compact_negative = _compact_negative_prompt(packet)
 
         prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = self._encode_prompt(
-            strong_positive,
-            negative_prompt=strong_negative,
+            compact_positive,
+            negative_prompt=compact_negative,
             do_cfg=True,
         )
 
@@ -167,10 +231,6 @@ class SDXLButterflyCrossAttentionGenerator:
                 else torch.Generator().manual_seed(seed)
             )
 
-            gs = self.guidance_scale
-            if "intensity 5/5" in strong_positive.lower() or "emotion intensity: 5" in strong_positive.lower():
-                gs += 0.5
-
             image = self.pipe(
                 prompt_embeds=augmented_prompt_embeds,
                 negative_prompt_embeds=negative_prompt_embeds,
@@ -179,7 +239,7 @@ class SDXLButterflyCrossAttentionGenerator:
                 width=self.width,
                 height=self.height,
                 num_inference_steps=self.num_inference_steps,
-                guidance_scale=gs,
+                guidance_scale=self.guidance_scale,
                 generator=generator,
             ).images[0]
 
@@ -191,7 +251,7 @@ class SDXLButterflyCrossAttentionGenerator:
                     frame_id=int(frame_id),
                     candidate_id=cid,
                     image_path=str(path),
-                    prompt=strong_positive,
+                    prompt=compact_positive,
                     scores={
                         "image_quality": 0.0,
                         "identity_consistency": 0.0,
@@ -205,8 +265,10 @@ class SDXLButterflyCrossAttentionGenerator:
                         "seed": seed,
                         "adapter_weights": packet.adapter_weights,
                         "cross_attention_adapter_tokens": int(adapter_tokens.shape[1]),
-                        "negative_prompt": strong_negative,
+                        "negative_prompt": compact_negative,
                         "full_color_enforced": True,
+                        "prompt_compacted_for_clip_77_tokens": True,
+                        "control_texts": control_texts,
                     },
                 )
             )
