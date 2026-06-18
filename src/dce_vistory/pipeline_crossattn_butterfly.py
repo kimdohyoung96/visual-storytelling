@@ -233,6 +233,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, int(sample.get("num_frames", 6)))
         storyboard = self.planner.generate_storyboard(seed, abstract, dce_plan, emotion_arc)
 
+        # Save core plan outputs after abstract/dcee/storyboard are finalized.
         self._save_core_plan_outputs(out_dir, seed, abstract, dce_plan, emotion_arc, storyboard)
 
         # 2. Initialize causal memory and anchor bank
@@ -464,6 +465,16 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             evaluation["run_errors"] = run_errors
             _write_json(out_dir / "evaluation.json", evaluation)
 
+        if not str(final_story_md).strip():
+            final_story_md = self._build_markdown(
+                abstract or "DCEE-CausalVerse generated a causal visual story from desire, conflict, event evidence, and ending emotion.",
+                dce_plan,
+                emotion_arc,
+                storyboard,
+                selected_images,
+                ending_candidates,
+                evaluation,
+            )
         (out_dir / "final_story.md").write_text(final_story_md, encoding="utf-8")
 
         # 7. Final output manifest.
