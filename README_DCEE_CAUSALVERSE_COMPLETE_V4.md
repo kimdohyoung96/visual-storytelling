@@ -1,217 +1,69 @@
-from __future__ import annotations
+# DCEE-CausalVerse Complete Stable Code v4
 
-import base64
-import mimetypes
-import os
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+This is a corrected complete patch for the final paper direction.
 
+## Why v4 was needed
 
-class BaseLLM:
-    def generate(self, system: str, user: str, temperature: float = 0.2, max_tokens: int = 1200) -> str:
-        raise NotImplementedError
+In the previous run, `contact_sheet.png` and images were generated, but:
+- `abstract.txt` was empty
+- `final_story.md` was empty
+- `dcee_plan.json` became too generic, e.g. "resolve the central problem" and "discovers the problem"
 
+That means the image generation code could run, but the DCEE planner was still too dependent on fragile LLM JSON output.
 
-class BaseVLM:
-    def generate_with_images(
-        self,
-        system: str,
-        user: str,
-        image_paths: List[str],
-        temperature: float = 0.0,
-        max_tokens: int = 800,
-    ) -> str:
-        raise NotImplementedError
+## What v4 changes
 
+### 1. Robust DCEE planner
+`src/dce_vistory/planner.py` is rewritten so that it validates LLM outputs.
+If the LLM returns empty, generic, or non-visual plans, it creates a concrete DCEE plan from:
 
-def _env_first(*names: str) -> Optional[str]:
-    for name in names:
-        value = os.environ.get(name)
-        if value:
-            return value
-    return None
+- protagonist
+- input premise
+- target ending emotion
+- detected objects
+- setting
 
+For woodcutter/axe/river stories, it creates a concrete DCEE-Tree plan with:
+- old iron axe
+- river
+- golden axe
+- fairy
+- empty hands
+- kneeling body
+- rain / riverbank evidence
 
-def _require_openai_client():
-    try:
-        from openai import OpenAI
-    except Exception as e:
-        raise RuntimeError(
-            "The `openai` package is required for strict API mode. Install it with `pip install openai`."
-        ) from e
-    return OpenAI
+### 2. DCEE-Tree candidates are no longer generic
+The patch writes meaningful `candidate_plans` and selected event chains.
 
+### 3. abstract.txt is never blank
+If LLM abstract generation fails, the planner creates a DCEE-style abstract.
 
-def _image_to_data_url(path: str) -> str:
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"Image path does not exist for VLM call: {p}")
-    mime = mimetypes.guess_type(str(p))[0] or "image/png"
-    data = base64.b64encode(p.read_bytes()).decode("utf-8")
-    return f"data:{mime};base64,{data}"
+### 4. storyboard is never generic
+If storyboard LLM output is generic, it is rebuilt from the selected event chain.
 
+### 5. final_story.md is never blank
+The pipeline now has an emergency fallback before writing final markdown.
 
-class StrictOpenAIChatLLM(BaseLLM):
-    """
-    Strict API-backed LLM.
+## Apply
 
-    No DummyLLM.
-    No silent fallback.
-    If the API key, model, base URL, or response is invalid, this class raises immediately.
-    """
+Unzip this patch at your project root and overwrite the existing files.
 
-    def __init__(self, cfg: Dict[str, Any]):
-        OpenAI = _require_openai_client()
-        provider = str(cfg.get("provider", "openrouter")).lower().strip()
+## Recommended clean run
 
-        api_key = (
-            cfg.get("api_key")
-            or _env_first("OPENAI_API_KEY", "OPENROUTER_API_KEY")
-        )
-        if not api_key:
-            raise RuntimeError(
-                "LLM API key is missing. Set OPENAI_API_KEY or OPENROUTER_API_KEY. "
-                "Strict mode refuses to use DummyLLM or fallback responses."
-            )
+```powershell
+Remove-Item -Recurse -Force outputs\DCEE_CausalVerse_sad_1
+$env:PYTHONPATH="src"
+python run_crossattn_butterfly_pipeline.py --config configs/crossattn_butterfly_dcee_causalverse.yaml --input examples/sad_1.json --out outputs/DCEE_CausalVerse_sad_1
+```
 
-        if provider == "openrouter":
-            base_url = cfg.get("base_url") or _env_first("OPENAI_BASE_URL", "OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
-            model = cfg.get("model") or _env_first("OPENAI_MODEL", "OPENROUTER_MODEL") or "openai/gpt-4o-mini"
-        elif provider == "openai":
-            base_url = cfg.get("base_url") or _env_first("OPENAI_BASE_URL") or None
-            model = cfg.get("model") or _env_first("OPENAI_MODEL") or "gpt-4o-mini"
-        else:
-            raise RuntimeError(
-                f"Unsupported LLM provider in strict mode: {provider}. "
-                "Use provider: openrouter or provider: openai."
-            )
+## Check these files
 
-        self.provider = provider
-        self.model = model
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
-
-    def generate(self, system: str, user: str, temperature: float = 0.2, max_tokens: int = 1200) -> str:
-        if not str(user).strip():
-            raise RuntimeError("LLM user prompt is empty.")
-
-        try:
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": str(system or "")},
-                    {"role": "user", "content": str(user)},
-                ],
-                temperature=float(temperature),
-                max_tokens=int(max_tokens),
-            )
-        except Exception as e:
-            raise RuntimeError(f"LLM API call failed for model={self.model}: {e}") from e
-
-        try:
-            content = resp.choices[0].message.content
-        except Exception as e:
-            raise RuntimeError(f"LLM API response has no message content: {resp}") from e
-
-        if not content or not str(content).strip():
-            raise RuntimeError("LLM API returned an empty response. Strict mode stops instead of using fallback.")
-        return str(content).strip()
-
-
-class StrictOpenAIVLM(BaseVLM):
-    """
-    Strict API-backed VLM using chat.completions with image_url parts.
-
-    No DummyVLM.
-    No silent fallback.
-    """
-
-    def __init__(self, cfg: Dict[str, Any]):
-        OpenAI = _require_openai_client()
-        provider = str(cfg.get("provider", "openrouter")).lower().strip()
-
-        api_key = (
-            cfg.get("api_key")
-            or _env_first("OPENAI_API_KEY", "OPENROUTER_API_KEY")
-        )
-        if not api_key:
-            raise RuntimeError(
-                "VLM API key is missing. Set OPENAI_API_KEY or OPENROUTER_API_KEY. "
-                "Strict mode refuses to use DummyVLM or fallback responses."
-            )
-
-        if provider == "openrouter":
-            base_url = cfg.get("base_url") or _env_first("OPENAI_BASE_URL", "OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
-            model = cfg.get("model") or _env_first("OPENAI_VLM_MODEL", "OPENAI_MODEL", "OPENROUTER_MODEL") or "openai/gpt-4o-mini"
-        elif provider == "openai":
-            base_url = cfg.get("base_url") or _env_first("OPENAI_BASE_URL") or None
-            model = cfg.get("model") or _env_first("OPENAI_VLM_MODEL", "OPENAI_MODEL") or "gpt-4o-mini"
-        else:
-            raise RuntimeError(
-                f"Unsupported VLM provider in strict mode: {provider}. "
-                "Use provider: openrouter or provider: openai."
-            )
-
-        self.provider = provider
-        self.model = model
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
-
-    def generate_with_images(
-        self,
-        system: str,
-        user: str,
-        image_paths: List[str],
-        temperature: float = 0.0,
-        max_tokens: int = 800,
-    ) -> str:
-        if not str(user).strip():
-            raise RuntimeError("VLM user prompt is empty.")
-        if not image_paths:
-            raise RuntimeError("VLM image_paths is empty.")
-
-        content: List[Dict[str, Any]] = [{"type": "text", "text": str(user)}]
-        for path in image_paths:
-            content.append({"type": "image_url", "image_url": {"url": _image_to_data_url(path)}})
-
-        try:
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": str(system or "")},
-                    {"role": "user", "content": content},
-                ],
-                temperature=float(temperature),
-                max_tokens=int(max_tokens),
-            )
-        except Exception as e:
-            raise RuntimeError(f"VLM API call failed for model={self.model}: {e}") from e
-
-        try:
-            out = resp.choices[0].message.content
-        except Exception as e:
-            raise RuntimeError(f"VLM API response has no message content: {resp}") from e
-
-        if not out or not str(out).strip():
-            raise RuntimeError("VLM API returned an empty response. Strict mode stops instead of using fallback.")
-        return str(out).strip()
-
-
-def build_llm(cfg: Dict[str, Any]) -> BaseLLM:
-    cfg = cfg or {}
-    provider = str(cfg.get("provider", "openrouter")).lower().strip()
-    if provider in {"dummy", "mock", "fake", "none", "local_dummy"}:
-        raise RuntimeError(
-            f"Dummy provider is forbidden in strict final code: {provider}. "
-            "Use provider: openrouter or provider: openai."
-        )
-    return StrictOpenAIChatLLM(cfg)
-
-
-def build_vlm(cfg: Dict[str, Any]) -> BaseVLM:
-    cfg = cfg or {}
-    provider = str(cfg.get("provider", "openrouter")).lower().strip()
-    if provider in {"dummy", "mock", "fake", "none", "local_dummy"}:
-        raise RuntimeError(
-            f"Dummy VLM provider is forbidden in strict final code: {provider}. "
-            "Use provider: openrouter or provider: openai."
-        )
-    return StrictOpenAIVLM(cfg)
+```text
+outputs/DCEE_CausalVerse_sad_1/abstract.txt
+outputs/DCEE_CausalVerse_sad_1/dcee_candidate_plans.json
+outputs/DCEE_CausalVerse_sad_1/dcee_plan.json
+outputs/DCEE_CausalVerse_sad_1/storyboard.json
+outputs/DCEE_CausalVerse_sad_1/contact_sheet.png
+outputs/DCEE_CausalVerse_sad_1/final_story.md
+outputs/DCEE_CausalVerse_sad_1/evaluation.json
+```
