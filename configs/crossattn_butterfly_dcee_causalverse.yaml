@@ -1,3 +1,4 @@
+# DCEE-CausalVerse STRICT FINAL config: no DummyLLM, no fallback LLM
 # DCEE-CausalVerse stable v3 config
 llm:
   provider: openrouter
