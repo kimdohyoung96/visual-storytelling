@@ -23,6 +23,40 @@ def colorfulness_score(path):
         return round(float(min(1.0, cf/60.0)),4)
     except Exception: return 0.3
 
+
+def _robust_make_contact_sheet(image_paths, out_path, cols=3, thumb_size=(384,384)):
+    from pathlib import Path
+    from PIL import Image, ImageDraw
+
+    valid = []
+    for p in image_paths:
+        if not p:
+            continue
+        pp = Path(p)
+        if pp.exists():
+            valid.append(pp)
+
+    if not valid:
+        raise ValueError("No existing selected image paths for contact sheet.")
+
+    rows = (len(valid) + cols - 1) // cols
+    canvas = Image.new("RGB", (cols * thumb_size[0], rows * thumb_size[1]), "white")
+    draw = ImageDraw.Draw(canvas)
+
+    for idx, path in enumerate(valid):
+        img = Image.open(path).convert("RGB")
+        img.thumbnail(thumb_size)
+        x = (idx % cols) * thumb_size[0]
+        y = (idx // cols) * thumb_size[1]
+        canvas.paste(img, (x, y))
+        draw.text((x + 10, y + 10), f"Frame {idx + 1}", fill=(0, 0, 0))
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(out_path)
+    return str(out_path)
+
+
 def _compact_storyboard(storyboard):
     return [{'frame_id':f.frame_id,'event':f.event,'event_grounding':getattr(f,'event_grounding',''),'evidence_objects':getattr(f,'evidence_objects',[]),'emotion':f.emotion,'must_show':getattr(f,'must_show',[])} for f in storyboard]
 
@@ -65,14 +99,35 @@ Return JSON only with scores 0-1: event_grounding, evidence_visibility, emotion_
         return sorted(out, key=lambda x:x.scores.get('overall',0.0), reverse=True)
     def rerank_ending_candidates(self, final_frame, dce_plan, candidates): return self.rank_frame_candidates(final_frame,dce_plan,candidates,is_ending=True)
     def evaluate_sequence(self, dce_plan, emotion_arc, storyboard, images, questions, out_dir=None):
-        if not images: return {'warning':'No images'}
-        cs=None
+        if not images:
+            return {'warning':'No images'}
+
+        cs = None
+        contact_sheet_error = None
+
         if self.save_contact_sheet and out_dir:
-            try: cs=make_contact_sheet([x.image_path for x in images], Path(out_dir)/'contact_sheet.png')
-            except Exception: cs=None
-        n=max(1,len(images))
-        keys=['image_quality','colorfulness','identity_consistency','emotion_visibility','emotion_cause_visibility','event_grounding','evidence_visibility','event_emotion_causal_consistency','scene_alignment','event_alignment']
-        data={k:round(sum(float(x.scores.get(k,0.0)) for x in images)/n,4) for k in keys}
-        data['ending_emotion_accuracy']=float(images[-1].scores.get('emotion_visibility',0.0)); data['narrative_coherence']=round((data['event_grounding']+data['event_emotion_causal_consistency']+data['scene_alignment'])/3,4)
-        if cs: data['contact_sheet_path']=str(cs)
+            out_path = Path(out_dir) / 'contact_sheet.png'
+            image_paths = [x.image_path for x in images]
+            try:
+                cs = make_contact_sheet(image_paths, out_path)
+            except Exception as e:
+                contact_sheet_error = f"utils.make_contact_sheet failed: {type(e).__name__}: {e}"
+                try:
+                    cs = _robust_make_contact_sheet(image_paths, out_path)
+                    contact_sheet_error = None
+                except Exception as e2:
+                    contact_sheet_error += f" | fallback failed: {type(e2).__name__}: {e2}"
+
+        n = max(1, len(images))
+        keys = ['image_quality','colorfulness','identity_consistency','emotion_visibility','emotion_cause_visibility','event_grounding','evidence_visibility','event_emotion_causal_consistency','scene_alignment','event_alignment']
+        data = {k: round(sum(float(x.scores.get(k, 0.0)) for x in images) / n, 4) for k in keys}
+        data['ending_emotion_accuracy'] = float(images[-1].scores.get('emotion_visibility', 0.0)) if images else 0.0
+        data['narrative_coherence'] = round((data.get('event_grounding',0.0) + data.get('event_emotion_causal_consistency',0.0) + data.get('scene_alignment',0.0)) / 3, 4)
+
+        if cs:
+            data['contact_sheet_path'] = str(cs)
+        if contact_sheet_error:
+            data['contact_sheet_error'] = contact_sheet_error
+
         return data
+
