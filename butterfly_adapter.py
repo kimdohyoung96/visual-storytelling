@@ -1,177 +1,48 @@
 from __future__ import annotations
-
+from dataclasses import asdict
 from typing import Any, Dict
+from .emotion_world_rules import get_world_rule
+from .latent_schema import CharacterLatent, WorldLatent, EmotionLatent, VisualControlPacket
 
-SYSTEM_NARRATIVE = """
-You are a research-grade visual storytelling planner. Return concise valid JSON whenever JSON is requested.
-Plan stories for ending-controllable causal visual storytelling. The core structure is DCEE:
-Desire -> Conflict -> Event Chain -> Ending Emotion. Each event must be visually drawable and must explain or intensify the protagonist's emotion.
+class ButterflyController:
+    """DCEE-CausalVerse visual controller with Character/World/Emotion/Event/Evidence branches."""
+    def __init__(self, quality_suffix: str, negative_prompt: str, num_hypotheses: int=3):
+        self.quality_suffix=quality_suffix; self.negative_prompt=negative_prompt; self.num_hypotheses=num_hypotheses
+
+    def build_character_latent(self, seed: Any) -> CharacterLatent:
+        profile=None
+        for p in getattr(seed,'character_profiles',[]) or []:
+            if getattr(p,'role','')=='protagonist' or getattr(p,'name','').lower()==getattr(seed,'protagonist','').lower(): profile=p; break
+        if profile is None and getattr(seed,'character_profiles',None): profile=seed.character_profiles[0]
+        if profile is None:
+            return CharacterLatent(name=getattr(seed,'protagonist','protagonist'), role='protagonist', identity_prompt=f"same protagonist identity: {getattr(seed,'protagonist','protagonist')}")
+        if hasattr(profile,'to_prompt'):
+            try: ident=profile.to_prompt()
+            except Exception: ident=str(getattr(profile,'identity_anchor_prompt',getattr(profile,'name','protagonist')))
+        else:
+            ident='; '.join(str(getattr(profile,k,'')) for k in ['name','role','face','hair','body','outfit','identity_anchor_prompt'] if getattr(profile,k,''))
+        return CharacterLatent(name=getattr(profile,'name',getattr(seed,'protagonist','protagonist')), role=getattr(profile,'role','protagonist'), identity_prompt=ident, outfit_prompt=getattr(profile,'outfit',''), signature_items=getattr(profile,'signature_items',[]) or [], reference_image=None, negative_prompt=getattr(profile,'negative_identity_prompt','different identity, changed face, changed outfit, inconsistent character'))
+
+    def create_packet(self, frame: Any, seed: Any, dce_plan: Any, memory: Dict[str,Any], style: str, previous_frame: Any=None, anchors: Dict[str,Any] | None=None) -> VisualControlPacket:
+        character=self.build_character_latent(seed); world_rule=get_world_rule(getattr(frame,'emotion',''))
+        world=WorldLatent(scene_location=getattr(frame,'scene_location','') or getattr(seed,'setting',''), time_of_day=getattr(frame,'time_of_day','') or 'cinematic story time', weather=getattr(frame,'weather','') or world_rule.get('weather','cinematic weather'), atmosphere=getattr(frame,'atmosphere','') or world_rule.get('environment','emotionally meaningful atmosphere'), environment_details=list(getattr(frame,'environment_details',[]) or [])+[world_rule.get('environment','story-relevant environment'), f"lighting: {getattr(frame,'lighting_style','') or world_rule.get('lighting','')}", f"color palette: {getattr(frame,'color_palette','') or world_rule.get('color','')}", f"composition: {getattr(frame,'composition_rule','') or world_rule.get('composition','')}"], scene_transition=getattr(frame,'scene_transition',''), symbolic_objects=getattr(seed,'visual_symbols',{}) if hasattr(seed,'visual_symbols') else {})
+        emotion=EmotionLatent(emotion=getattr(frame,'emotion',''), intensity=int(getattr(frame,'emotion_intensity',3)), delta_from_previous=getattr(frame,'emotion_delta',''), facial_rule=getattr(frame,'facial_cue',''), body_rule=getattr(frame,'body_cue',''), lighting_rule=getattr(frame,'lighting_style','') or world_rule.get('lighting',''), color_rule=getattr(frame,'color_palette','') or world_rule.get('color',''), composition_rule=getattr(frame,'composition_rule','') or world_rule.get('composition',''))
+        intensity=max(1,min(5,emotion.intensity)); emotion_w=0.18+0.07*intensity
+        adapter_weights={'character_adapter':0.26,'world_adapter':0.18,'emotion_adapter':emotion_w,'event_adapter':0.18,'evidence_adapter':0.20}
+        char_text=character.identity_prompt + (f"; outfit: {character.outfit_prompt}" if character.outfit_prompt else '') + (('; signature items: '+', '.join(character.signature_items)) if character.signature_items else '')
+        event_text=f"DCEE visible event: {getattr(frame,'event','')}; causal role: {getattr(frame,'event_causal_role','')}; event grounding: {getattr(frame,'event_grounding','')}; narrative function: {getattr(frame,'narrative_function','')}"
+        evidence_text=f"visual evidence objects: {getattr(frame,'evidence_objects',[])}; emotion evidence: {getattr(frame,'emotion_evidence',[])}; must show: {getattr(frame,'must_show',[])}; visual cause of emotion must be visible"
+        world_text=world.to_prompt(); emotion_text=emotion.to_prompt(); anchor_text=str(anchors or {})
+        positive=f"""
+[STYLE] {style}
+[CHARACTER] {char_text}. Preserve identity but allow frame-specific facial expression and pose.
+[DCEE EVENT] {event_text}
+[EVIDENCE] {evidence_text}
+[WORLD] {world_text}
+[EMOTION CAUSED BY EVENT] {emotion_text}
+[CAUSAL MEMORY] {memory}
+[ANCHORS] {anchor_text}
+[QUALITY] {self.quality_suffix}
+Create a coherent full-color cinematic storybook illustration. The event, evidence, and emotion cause must be visible.
 """.strip()
-
-SYSTEM_VLM = """
-You are a strict visual narrative evaluator. Return concise valid JSON only.
-Evaluate whether an image shows the planned DCEE event, evidence, emotion, world state, and character identity.
-""".strip()
-
-QUALITY_SUFFIX = (
-    "full-color cinematic storybook illustration, rich natural colors, emotionally meaningful color palette, "
-    "clear event grounding, clear visual evidence, expressive face, expressive body language, detailed background, "
-    "coherent anatomy, cinematic lighting, sharp focus, professional illustration quality"
-)
-
-NEGATIVE_PROMPT = (
-    "monochrome, black and white, grayscale, pencil sketch, charcoal sketch, line art only, colorless image, "
-    "missing event, missing visual evidence, emotionless face, weak expression, stiff pose, portrait only, "
-    "empty background, low quality, blurry, bad anatomy, distorted face, watermark, text"
-)
-
-EMOTION_RENDER_BOOK: Dict[str, Dict[str, str]] = {
-    "joy": {"face":"bright eyes, raised cheeks, open smile", "body":"open chest, lifted posture, relaxed shoulders", "lighting":"warm sunlight, clean highlights", "palette":"golden yellow, warm green, sky blue", "weather":"clear sky or clouds opening", "composition":"open composition with visible space ahead"},
-    "relief": {"face":"soft exhale, relaxed eyes, grateful subtle smile", "body":"shoulders dropping after tension, grounded posture", "lighting":"soft warm light after shadow", "palette":"warm beige, gentle green, soft amber", "weather":"clouds clearing, gentle breeze", "composition":"balanced frame with reduced pressure"},
-    "hope": {"face":"focused eyes, slightly raised brows, determined gentle mouth", "body":"forward-leaning stance, ready movement", "lighting":"soft warm directional light", "palette":"fresh green, warm earth tones, soft blue", "weather":"clear or lightly cloudy", "composition":"visible path or destination"},
-    "sadness": {"face":"downcast eyes, tightened mouth, heavy eyelids", "body":"slumped shoulders, lowered head, closed posture", "lighting":"dim diffused light, soft shadow", "palette":"cool desaturated blue-gray with muted earth colors", "weather":"rain, overcast sky, mist", "composition":"negative space and isolation"},
-    "regret": {"face":"downcast eyes, tense mouth, pained expression", "body":"slumped shoulders, hand near chest or face", "lighting":"dim side light", "palette":"muted blue-gray, faded brown, low saturation but full color", "weather":"drizzle, mist, overcast sky", "composition":"lonely frame with visible evidence of a wrong choice"},
-    "fear": {"face":"wide eyes, tense brows, tight jaw", "body":"defensive pose, recoiling posture", "lighting":"hard contrast, looming shadows", "palette":"cold blue, gray, desaturated green", "weather":"fog, storm, oppressive darkness", "composition":"off-center framing with visible threat"},
-    "anger": {"face":"furrowed brows, intense stare, clenched jaw", "body":"rigid shoulders, clenched fist, forceful gesture", "lighting":"harsh directional light", "palette":"red-orange accents, dark browns", "weather":"wind and dramatic clouds", "composition":"diagonal tension and compressed frame"},
-    "determination": {"face":"steady eyes, focused brows, firm mouth", "body":"forward movement, strong stance", "lighting":"strong light cutting through shadow", "palette":"earth tones with warm highlights", "weather":"wind or clearing clouds", "composition":"forward momentum and visible obstacle"},
-    "doubt": {"face":"uncertain gaze, tightened brows, hesitant mouth", "body":"paused pose, weight shifted back", "lighting":"muted side light", "palette":"cool gray-blue with pale greens", "weather":"mist, thin clouds", "composition":"ambiguous space, partially blocked path"},
-    "anxiety": {"face":"worried eyes, tense brows, pressed lips", "body":"tight shoulders, restless hands", "lighting":"uneven cool light", "palette":"cold green-gray, muted blue", "weather":"cloudy wind before rain", "composition":"constricted path or crowded foreground"},
-}
-
-def get_emotion_rule(emotion: str) -> Dict[str, str]:
-    return EMOTION_RENDER_BOOK.get((emotion or '').lower().strip(), {
-        'face':'readable emotional facial expression', 'body':'readable emotional body posture',
-        'lighting':'cinematic lighting aligned with emotion', 'palette':'full natural color palette aligned with emotion',
-        'weather':'weather aligned with story situation', 'composition':'composition that reveals emotional state'
-    })
-
-def emotion_rule_text(emotion: str) -> str:
-    r = get_emotion_rule(emotion)
-    return f"face: {r['face']}; body: {r['body']}; lighting: {r['lighting']}; palette: {r['palette']}; weather: {r['weather']}; composition: {r['composition']}"
-
-def emotion_delta_text(prev_emotion: str | None, cur_emotion: str, intensity: int) -> str:
-    if not prev_emotion:
-        return f"establish {cur_emotion} with visible intensity {intensity}/5"
-    if prev_emotion == cur_emotion:
-        return f"maintain {cur_emotion}, intensity {intensity}/5"
-    return f"visible transition from {prev_emotion} to {cur_emotion}; show it through face, body, color, light, weather and evidence"
-
-def choose_shot_type(idx: int, total: int, narrative_function: str) -> str:
-    nf=(narrative_function or '').lower()
-    if idx == 0: return 'wide establishing shot'
-    if 'climax' in nf or 'turning' in nf: return 'dramatic medium close-up'
-    if 'ending' in nf or 'resolution' in nf or idx == total-1: return 'medium-wide ending shot'
-    if 'conflict' in nf or 'obstacle' in nf: return 'action-focused medium shot'
-    if 'reaction' in nf or 'emotion' in nf: return 'emotional close-up'
-    return 'medium shot'
-
-def choose_camera_distance(shot_type: str) -> str:
-    st=(shot_type or '').lower()
-    if 'close' in st: return 'close'
-    if 'wide' in st: return 'wide'
-    return 'medium'
-
-def image_understanding_prompt(image_path: str, sample: dict) -> str:
-    return f"""
-Describe the input image for DCEE visual storytelling.
-Return JSON with: caption, characters, setting, objects, mood, inferred_plot_hint, time_of_day, weather, environment_details.
-Image path: {image_path}
-Text prompt: {sample.get('text_prompt')}
-Protagonist: {sample.get('protagonist')}
-Target ending emotion: {sample.get('target_ending_emotion')}
-""".strip()
-
-def story_seed_prompt(sample: dict, image_summary: dict | None) -> str:
-    return f"""
-Create a story seed, character bible, object/evidence list, and world context.
-Input sample: {sample}
-Image summary: {image_summary}
-Return JSON with: setting, objects, characters, mood, visual_symbols, world_context, character_profiles.
-character_profiles must include name, role, face, hair, body, outfit, signature_items, color_palette, identity_anchor_prompt.
-""".strip()
-
-def story_abstract_prompt(seed: dict) -> str:
-    return f"""
-Write a 4-6 sentence abstract for an ending-controllable visual story. The abstract must imply Desire, Conflict, Event Chain, and Ending Emotion.
-Seed: {seed}
-""".strip()
-
-def dcee_branch_plan_prompt(seed: dict, abstract: str, num_candidates: int = 4) -> str:
-    return f"""
-Generate {num_candidates} alternative DCEE candidate plans for the same seed and target ending emotion.
-Each candidate must contain: candidate_id, desire, conflict, conflict_escalation, event_chain, turning_point, ending_emotion, ending_state, rationale.
-Each event_chain item must contain: event_id, event, causal_role, visual_grounding, emotion_effect, key_objects, evidence_objects.
-The candidates should explore different Desire->Conflict routes before choosing events. The best event chain should make the target ending emotion visually believable.
-Seed: {seed}
-Abstract: {abstract}
-Return JSON: {{"candidates": [...]}}
-""".strip()
-
-def dcee_candidate_selection_prompt(seed: dict, abstract: str, candidates: list) -> str:
-    return f"""
-Select the best DCEE candidate for visual storytelling. Score each candidate using:
-causal_coherence, ending_emotion_fit, event_drawability, evidence_visibility, conflict_strength, novelty, frame_coverage.
-Return JSON: {{"selected_candidate_id": "...", "scores": [...], "reason": "..."}}
-Seed: {seed}
-Abstract: {abstract}
-Candidates: {candidates}
-""".strip()
-
-def dce_plan_prompt(seed: dict, abstract: str) -> str:
-    # Backward compatible name, now DCEE.
-    return dcee_branch_plan_prompt(seed, abstract, num_candidates=1)
-
-def emotion_arc_prompt(seed: dict, abstract: str, dce_plan: dict, num_frames: int) -> str:
-    return f"""
-Create an emotion arc with exactly {num_frames} states for the selected DCEE event chain.
-Return JSON: {{"states": [...], "intensities": [...], "valence_curve": [...], "arousal_curve": [...], "suspense_curve": [...], "rationale": "..."}}
-The last emotion must match the target ending emotion or a natural synonym.
-Seed: {seed}
-Abstract: {abstract}
-DCEE plan: {dce_plan}
-""".strip()
-
-def storyboard_prompt(seed: dict, abstract: str, dce_plan: dict, emotion_arc: dict, num_frames: int) -> str:
-    return f"""
-Create a {num_frames}-frame DCEE storyboard. Return a JSON array.
-Each frame must include: frame_id, caption, narrative_function, event, event_causal_role, event_grounding, protagonist_state, desire_link, conflict_level, emotion, emotion_intensity, visual_focus, key_objects, evidence_objects, facial_cue, body_cue, event_cue, scene_cue, cinematic_cue, scene_location, time_of_day, weather, atmosphere, environment_details, supporting_cast, scene_transition.
-Every frame must show the DCEE event, the visual evidence, and why the event causes the emotion.
-Seed: {seed}
-Abstract: {abstract}
-DCEE plan: {dce_plan}
-Emotion arc: {emotion_arc}
-""".strip()
-
-def canonicalize_storyboard_prompt(seed: dict, dce_plan: dict, storyboard: list) -> str:
-    return f"""
-Canonicalize the storyboard for diffusion generation. Replace pronouns and vague references with explicit entity/object names. Convert abstract events into drawable visual events.
-Return the same JSON array with clarified event, key_objects, evidence_objects, and must_show fields.
-Seed: {seed}
-DCEE plan: {dce_plan}
-Storyboard: {storyboard}
-""".strip()
-
-def eval_questions_prompt(dce_plan: dict, emotion_arc: dict, storyboard: list) -> str:
-    return f"""
-Generate VQA-style questions for DCEE visual storytelling evaluation.
-Return JSON with global_questions, frame_questions, ending_questions.
-Questions must cover event grounding, evidence visibility, event-emotion causal consistency, character consistency, world consistency, colorfulness, and ending emotion accuracy.
-DCEE plan: {dce_plan}
-Emotion arc: {emotion_arc}
-Storyboard: {storyboard}
-""".strip()
-
-def frame_prompt(frame: dict, dce_plan: dict, emotion_arc: dict, memory: dict, style: str, input_image_summary: dict | None) -> str:
-    return f"""
-{style}, full-color cinematic storybook illustration.
-Character: {frame.get('character_identity')} {frame.get('character_reference_prompt')}
-DCEE event: {frame.get('event')}
-Causal role: {frame.get('event_causal_role')}
-Visual grounding/evidence: {frame.get('event_grounding')}; {frame.get('emotion_evidence')}; must show {frame.get('must_show')}
-Emotion: {frame.get('emotion')} intensity {frame.get('emotion_intensity')}/5; {frame.get('emotion_visual_rule')}
-World: {frame.get('scene_location')}, {frame.get('time_of_day')}, {frame.get('weather')}, {frame.get('atmosphere')}, {frame.get('environment_details')}
-Camera/color: {frame.get('shot_type')}, {frame.get('camera_distance')}, {frame.get('lighting_style')}, {frame.get('color_palette')}
-Memory: {memory}
-Quality: {QUALITY_SUFFIX}
-Never grayscale. The image must show what happened and why the protagonist feels this emotion.
-""".strip()
+        return VisualControlPacket(frame_id=int(getattr(frame,'frame_id',0)), positive_prompt=positive, negative_prompt=self.negative_prompt+'; '+character.negative_prompt+'; missing event, missing evidence, weak emotion, portrait only', adapter_weights=adapter_weights, control_metadata={'character_text':char_text,'world_text':world_text,'emotion_text':emotion_text,'event_text':event_text,'evidence_text':evidence_text,'anchor_text':anchor_text,'dcee_event_text':event_text,'event_causal_role':getattr(frame,'event_causal_role',''),'event_grounding':getattr(frame,'event_grounding',''),'evidence_objects':getattr(frame,'evidence_objects',[]),'emotion_evidence':getattr(frame,'emotion_evidence',[]),'must_show':getattr(frame,'must_show',[]),'world':asdict(world),'emotion':asdict(emotion),'character':asdict(character)}, reference_images={})
