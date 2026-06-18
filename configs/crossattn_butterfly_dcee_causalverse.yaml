@@ -1,3 +1,4 @@
+# DCEE-CausalVerse stable v3 config
 llm:
   provider: openrouter
   model: openai/gpt-4o-mini
@@ -22,7 +23,7 @@ image_generator:
   height: 1024
   num_inference_steps: 40
   guidance_scale: 8.0
-  num_candidates_per_frame: 3
+  num_candidates_per_frame: 2
   num_ending_candidates: 5
   seed: 42
   enable_cpu_offload: false
