@@ -96,6 +96,38 @@ Write a 4-6 sentence abstract for an ending-controllable visual story. The abstr
 Seed: {seed}
 """.strip()
 
+
+
+def full_story_prompt(seed: Dict[str, Any], abstract: str, dce_plan: Dict[str, Any], emotion_arc: Dict[str, Any], num_frames: int) -> str:
+    return f"""
+Create a full narrative story draft aligned with DCEE visual storytelling.
+
+INPUT:
+- Story seed: {seed}
+- Abstract: {abstract}
+- DCEE plan: {dce_plan}
+- Emotion arc: {emotion_arc}
+- Required frame count: {num_frames}
+
+Return JSON only in this format:
+{{
+  "story_title": "short title",
+  "sentences": [
+    {{"frame_id": 1, "sentence": "frame-aligned narrative sentence", "dcee_stage": "Desire", "event": "concrete event", "emotion": "emotion state", "alignment_reason": "why this sentence belongs to frame 1"}}
+  ]
+}}
+
+STRICT REQUIREMENTS:
+- Return exactly {num_frames} sentences.
+- Each sentence must correspond to exactly one visual frame.
+- The sentence sequence must tell one coherent story from beginning to end.
+- Each sentence must be concrete, visually drawable, and temporally ordered.
+- The overall story must follow Desire -> Conflict -> Event progression and end with the target ending emotion.
+- Sentence 1 should establish the protagonist and desire.
+- Middle sentences should visualize conflict escalation and event progression.
+- The final sentence must visually support the target ending emotion.
+- Do not use generic placeholders.
+""".strip()
 def dcee_branch_plan_prompt(seed: dict, abstract: str, num_candidates: int = 4) -> str:
     return f"""
 Generate {num_candidates} alternative DCEE candidate plans for the same seed and target ending emotion.

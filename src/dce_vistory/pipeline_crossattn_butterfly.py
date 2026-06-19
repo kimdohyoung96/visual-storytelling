@@ -198,10 +198,11 @@ class CrossAttentionButterflyDCEViStoryPipeline:
 
         return packet
 
-    def _save_core_plan_outputs(self, out_dir: Path, seed, abstract, dce_plan, emotion_arc, storyboard):
+    def _save_core_plan_outputs(self, out_dir: Path, seed, abstract, full_story, dce_plan, emotion_arc, storyboard):
         """Save all core textual planning files."""
         _write_json(out_dir / "seed.json", seed)
         (out_dir / "abstract.txt").write_text(str(abstract), encoding="utf-8")
+        _write_json(out_dir / "full_story.json", full_story)
         _write_json(out_dir / "dcee_plan.json", dce_plan)
         _write_json(out_dir / "dce_plan.json", dce_plan)  # backward-compatible alias
         _write_json(out_dir / "emotion_arc.json", emotion_arc)
@@ -231,10 +232,11 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, int(sample.get("num_frames", 6)))
-        storyboard = self.planner.generate_storyboard(seed, abstract, dce_plan, emotion_arc)
+        full_story = self.planner.generate_full_story(seed, abstract, dce_plan, emotion_arc, int(sample.get("num_frames", 6)))
+        storyboard = self.planner.generate_storyboard(seed, abstract, dce_plan, emotion_arc, full_story=full_story)
 
-        # Save core plan outputs after abstract/dcee/storyboard are finalized.
-        self._save_core_plan_outputs(out_dir, seed, abstract, dce_plan, emotion_arc, storyboard)
+        # Save core plan outputs after abstract/full_story/dcee/storyboard are finalized.
+        self._save_core_plan_outputs(out_dir, seed, abstract, full_story, dce_plan, emotion_arc, storyboard)
 
         # 2. Initialize causal memory and anchor bank
         memory = DCEECausalMemoryStore()
@@ -446,6 +448,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         try:
             final_story_md = self._build_markdown(
                 abstract,
+                full_story,
                 dce_plan,
                 emotion_arc,
                 storyboard,
@@ -479,6 +482,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
                 "selected_images": str(out_dir / "selected_images.json"),
                 "candidate_manifest": str(out_dir / "candidate_manifest.json"),
                 "storyboard": str(out_dir / "storyboard.json"),
+                "full_story": str(out_dir / "full_story.json"),
                 "dcee_plan": str(out_dir / "dcee_plan.json"),
                 "has_contact_sheet": (out_dir / "contact_sheet.png").exists(),
                 "num_selected_images": len(selected_images),
@@ -499,11 +503,15 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         )
 
     @staticmethod
-    def _build_markdown(abstract, dce_plan, emotion_arc, storyboard, images, ending_candidates, evaluation):
+    def _build_markdown(abstract, full_story, dce_plan, emotion_arc, storyboard, images, ending_candidates, evaluation):
         lines = [
             "# DCEE-CausalVerse Visual Story\n",
             "## Abstract\n",
             str(abstract) + "\n",
+            "## Full Story Draft\n",
+            f"- Title: {(full_story or {}).get('story_title', '')}" if isinstance(full_story, dict) else "",
+            *([f"  - [{row.get('frame_id', i+1)}] {row.get('sentence', '')}" for i, row in enumerate((full_story or {}).get('sentences', []))] if isinstance(full_story, dict) else []),
+            "",
             "## Selected DCEE Plan\n",
             f"- Desire: {getattr(dce_plan, 'desire', '')}",
             f"- Conflict: {getattr(dce_plan, 'conflict', '')}",
@@ -528,6 +536,8 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             lines += [
                 f"### Frame {getattr(frame, 'frame_id', '')}: {getattr(frame, 'narrative_function', '')}",
                 f"![Frame {getattr(frame, 'frame_id', '')}]({getattr(image, 'image_path', '')})",
+                f"- Story Sentence: {getattr(frame, 'story_sentence', '')}",
+                f"- Story Alignment: {getattr(frame, 'story_alignment_reason', '')}",
                 f"- Event: {getattr(frame, 'event', '')}",
                 f"- Event Grounding: {getattr(frame, 'event_grounding', '')}",
                 f"- Emotion Arc State: {getattr(frame, 'emotion', '')}",

@@ -32,12 +32,14 @@ class ButterflyController:
         identity_lock = getattr(frame, 'identity_lock', {}) or {}
         identity_lock_text = '; '.join(f"{k}: {v}" for k, v in identity_lock.items() if v)
         char_text=(character.identity_prompt + '; STRICT IDENTITY LOCK: same age, gender, face shape, hairstyle, body proportions, outfit; only expression, pose, event, emotion, and background may change. ' + identity_lock_text + '; ') + (f"; outfit: {character.outfit_prompt}" if character.outfit_prompt else '') + (('; signature items: '+', '.join(character.signature_items)) if character.signature_items else '')
+        story_text=f"story sentence: {getattr(frame,'story_sentence','')}; alignment reason: {getattr(frame,'story_alignment_reason','')}"
         event_text=f"DCEE visible event: {getattr(frame,'event','')}; causal role: {getattr(frame,'event_causal_role','')}; event grounding: {getattr(frame,'event_grounding','')}; narrative function: {getattr(frame,'narrative_function','')}"
         evidence_text=f"visual evidence objects: {getattr(frame,'evidence_objects',[])}; emotion evidence: {getattr(frame,'emotion_evidence',[])}; must show: {getattr(frame,'must_show',[])}; visual cause of emotion must be visible"
         world_text=world.to_prompt(); emotion_text=emotion.to_prompt(); anchor_text=str(anchors or {})
         positive=f"""
 [STYLE] {style}
 [CHARACTER] {char_text}. Preserve identity but allow frame-specific facial expression and pose.
+[STORY SENTENCE] {story_text}
 [DCEE EVENT] {event_text}
 [EVIDENCE] {evidence_text}
 [WORLD] {world_text}
@@ -47,4 +49,4 @@ class ButterflyController:
 [QUALITY] {self.quality_suffix}
 Create a coherent full-color cinematic storybook illustration. The event, evidence, and emotion cause must be visible.
 """.strip()
-        return VisualControlPacket(frame_id=int(getattr(frame,'frame_id',0)), positive_prompt=positive, negative_prompt=self.negative_prompt+'; '+character.negative_prompt+'; missing event, missing evidence, weak emotion, portrait only', adapter_weights=adapter_weights, control_metadata={'character_text':char_text,'world_text':world_text,'emotion_text':emotion_text,'event_text':event_text,'evidence_text':evidence_text,'anchor_text':anchor_text,'dcee_event_text':event_text,'event_causal_role':getattr(frame,'event_causal_role',''),'event_grounding':getattr(frame,'event_grounding',''),'evidence_objects':getattr(frame,'evidence_objects',[]),'emotion_evidence':getattr(frame,'emotion_evidence',[]),'must_show':getattr(frame,'must_show',[]),'world':asdict(world),'emotion':asdict(emotion),'character':asdict(character)}, reference_images={})
+        return VisualControlPacket(frame_id=int(getattr(frame,'frame_id',0)), positive_prompt=positive, negative_prompt=self.negative_prompt+'; '+character.negative_prompt+'; missing event, missing evidence, weak emotion, portrait only', adapter_weights=adapter_weights, control_metadata={'character_text':char_text,'world_text':world_text,'emotion_text':emotion_text,'story_text':story_text,'event_text':event_text,'evidence_text':evidence_text,'anchor_text':anchor_text,'dcee_event_text':event_text,'event_causal_role':getattr(frame,'event_causal_role',''),'event_grounding':getattr(frame,'event_grounding',''),'evidence_objects':getattr(frame,'evidence_objects',[]),'emotion_evidence':getattr(frame,'emotion_evidence',[]),'must_show':getattr(frame,'must_show',[]),'world':asdict(world),'emotion':asdict(emotion),'character':asdict(character)}, reference_images={})
