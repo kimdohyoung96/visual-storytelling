@@ -21,7 +21,7 @@ class ButterflyController:
             except Exception: ident=str(getattr(profile,'identity_anchor_prompt',getattr(profile,'name','protagonist')))
         else:
             ident='; '.join(str(getattr(profile,k,'')) for k in ['name','role','face','hair','body','outfit','identity_anchor_prompt'] if getattr(profile,k,''))
-        return CharacterLatent(name=getattr(profile,'name',getattr(seed,'protagonist','protagonist')), role=getattr(profile,'role','protagonist'), identity_prompt=ident, outfit_prompt=getattr(profile,'outfit',''), signature_items=getattr(profile,'signature_items',[]) or [], reference_image=None, negative_prompt=getattr(profile,'negative_identity_prompt','different identity, changed face, changed outfit, inconsistent character'))
+        return CharacterLatent(name=getattr(profile,'name',getattr(seed,'protagonist','protagonist')), role=getattr(profile,'role','protagonist'), identity_prompt=ident, outfit_prompt=getattr(profile,'outfit',''), signature_items=getattr(profile,'signature_items',[]) or [], reference_image=None, negative_prompt=getattr(profile,'negative_identity_prompt','different identity, changed face, changed outfit, inconsistent character, child version, older version, gender changed'))
 
     def create_packet(self, frame: Any, seed: Any, dce_plan: Any, memory: Dict[str,Any], style: str, previous_frame: Any=None, anchors: Dict[str,Any] | None=None) -> VisualControlPacket:
         character=self.build_character_latent(seed); world_rule=get_world_rule(getattr(frame,'emotion',''))
@@ -29,7 +29,9 @@ class ButterflyController:
         emotion=EmotionLatent(emotion=getattr(frame,'emotion',''), intensity=int(getattr(frame,'emotion_intensity',3)), delta_from_previous=getattr(frame,'emotion_delta',''), facial_rule=getattr(frame,'facial_cue',''), body_rule=getattr(frame,'body_cue',''), lighting_rule=getattr(frame,'lighting_style','') or world_rule.get('lighting',''), color_rule=getattr(frame,'color_palette','') or world_rule.get('color',''), composition_rule=getattr(frame,'composition_rule','') or world_rule.get('composition',''))
         intensity=max(1,min(5,emotion.intensity)); emotion_w=0.18+0.07*intensity
         adapter_weights={'character_adapter':0.26,'world_adapter':0.18,'emotion_adapter':emotion_w,'event_adapter':0.18,'evidence_adapter':0.20}
-        char_text=character.identity_prompt + (f"; outfit: {character.outfit_prompt}" if character.outfit_prompt else '') + (('; signature items: '+', '.join(character.signature_items)) if character.signature_items else '')
+        identity_lock = getattr(frame, 'identity_lock', {}) or {}
+        identity_lock_text = '; '.join(f"{k}: {v}" for k, v in identity_lock.items() if v)
+        char_text=(character.identity_prompt + '; STRICT IDENTITY LOCK: same age, gender, face shape, hairstyle, body proportions, outfit; only expression, pose, event, emotion, and background may change. ' + identity_lock_text + '; ') + (f"; outfit: {character.outfit_prompt}" if character.outfit_prompt else '') + (('; signature items: '+', '.join(character.signature_items)) if character.signature_items else '')
         event_text=f"DCEE visible event: {getattr(frame,'event','')}; causal role: {getattr(frame,'event_causal_role','')}; event grounding: {getattr(frame,'event_grounding','')}; narrative function: {getattr(frame,'narrative_function','')}"
         evidence_text=f"visual evidence objects: {getattr(frame,'evidence_objects',[])}; emotion evidence: {getattr(frame,'emotion_evidence',[])}; must show: {getattr(frame,'must_show',[])}; visual cause of emotion must be visible"
         world_text=world.to_prompt(); emotion_text=emotion.to_prompt(); anchor_text=str(anchors or {})

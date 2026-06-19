@@ -152,7 +152,7 @@ class DCEQAEvaluator:
             return {}
 
         prompt = f"""
-Evaluate this image for DCEE visual storytelling.
+Evaluate this image for DCEE visual storytelling. Prioritize story-event fit, evidence visibility, visible cause of emotion, and target emotion. Do not over-reward fixed shot type or fixed pose.
 
 Planned event: {getattr(frame, 'event', '')}
 Event grounding: {getattr(frame, 'event_grounding', '')}
