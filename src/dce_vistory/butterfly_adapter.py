@@ -4,6 +4,37 @@ from typing import Any, Dict
 from .emotion_world_rules import get_world_rule
 from .latent_schema import CharacterLatent, WorldLatent, EmotionLatent, VisualControlPacket
 
+
+def _normalize_symbolic_objects(value):
+    """
+    Normalize seed.visual_symbols / symbolic_objects for WorldLatent.
+    WorldLatent.to_prompt() expects a dict and calls .items().
+    """
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return {str(k): str(v) for k, v in value.items() if str(k).strip()}
+    if isinstance(value, str):
+        text = value.strip()
+        return {text: "visual symbol"} if text else {}
+    if isinstance(value, (list, tuple)):
+        out = {}
+        for item in value:
+            if item is None:
+                continue
+            if isinstance(item, dict):
+                key = item.get("object") or item.get("name") or item.get("symbol") or item.get("item") or item.get("key")
+                val = item.get("meaning") or item.get("symbolic_meaning") or item.get("description") or item.get("value") or "visual symbol"
+                if key:
+                    out[str(key)] = str(val)
+            else:
+                text = str(item).strip()
+                if text:
+                    out[text] = "visual symbol"
+        return out
+    return {str(value): "visual symbol"}
+
+
 class ButterflyController:
     """DCEE-CausalVerse visual controller with Character/World/Emotion/Event/Evidence branches."""
     def __init__(self, quality_suffix: str, negative_prompt: str, num_hypotheses: int=3):
@@ -25,7 +56,7 @@ class ButterflyController:
 
     def create_packet(self, frame: Any, seed: Any, dce_plan: Any, memory: Dict[str,Any], style: str, previous_frame: Any=None, anchors: Dict[str,Any] | None=None) -> VisualControlPacket:
         character=self.build_character_latent(seed); world_rule=get_world_rule(getattr(frame,'emotion',''))
-        world=WorldLatent(scene_location=getattr(frame,'scene_location','') or getattr(seed,'setting',''), time_of_day=getattr(frame,'time_of_day','') or 'cinematic story time', weather=getattr(frame,'weather','') or world_rule.get('weather','cinematic weather'), atmosphere=getattr(frame,'atmosphere','') or world_rule.get('environment','emotionally meaningful atmosphere'), environment_details=list(getattr(frame,'environment_details',[]) or [])+[world_rule.get('environment','story-relevant environment'), f"lighting: {getattr(frame,'lighting_style','') or world_rule.get('lighting','')}", f"color palette: {getattr(frame,'color_palette','') or world_rule.get('color','')}", f"composition: {getattr(frame,'composition_rule','') or world_rule.get('composition','')}"], scene_transition=getattr(frame,'scene_transition',''), symbolic_objects=getattr(seed,'visual_symbols',{}) if hasattr(seed,'visual_symbols') else {})
+        world=WorldLatent(scene_location=getattr(frame,'scene_location','') or getattr(seed,'setting',''), time_of_day=getattr(frame,'time_of_day','') or 'cinematic story time', weather=getattr(frame,'weather','') or world_rule.get('weather','cinematic weather'), atmosphere=getattr(frame,'atmosphere','') or world_rule.get('environment','emotionally meaningful atmosphere'), environment_details=list(getattr(frame,'environment_details',[]) or [])+[world_rule.get('environment','story-relevant environment'), f"lighting: {getattr(frame,'lighting_style','') or world_rule.get('lighting','')}", f"color palette: {getattr(frame,'color_palette','') or world_rule.get('color','')}", f"composition: {getattr(frame,'composition_rule','') or world_rule.get('composition','')}"], scene_transition=getattr(frame,'scene_transition',''), symbolic_objects=_normalize_symbolic_objects(getattr(seed,'visual_symbols',{}) if hasattr(seed,'visual_symbols') else {}))
         emotion=EmotionLatent(emotion=getattr(frame,'emotion',''), intensity=int(getattr(frame,'emotion_intensity',3)), delta_from_previous=getattr(frame,'emotion_delta',''), facial_rule=getattr(frame,'facial_cue',''), body_rule=getattr(frame,'body_cue',''), lighting_rule=getattr(frame,'lighting_style','') or world_rule.get('lighting',''), color_rule=getattr(frame,'color_palette','') or world_rule.get('color',''), composition_rule=getattr(frame,'composition_rule','') or world_rule.get('composition',''))
         intensity=max(1,min(5,emotion.intensity)); emotion_w=0.18+0.07*intensity
         adapter_weights={'character_adapter':0.26,'world_adapter':0.18,'emotion_adapter':emotion_w,'event_adapter':0.18,'evidence_adapter':0.20}
