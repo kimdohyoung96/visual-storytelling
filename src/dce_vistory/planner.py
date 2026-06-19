@@ -129,6 +129,37 @@ def _ending_synonym(target: str) -> str:
     return mapping.get(t, t or "resolution")
 
 
+def _emotion_family(emotion: str) -> str:
+    """Map fine-grained emotion labels into broad ending-emotion families."""
+    e = _ending_synonym(emotion)
+    groups = {
+        "sadness": {
+            "sadness", "sad", "regret", "grief", "sorrow", "melancholy", "despair",
+            "disappointment", "loss", "loneliness", "remorse", "heartbreak", "guilt"
+        },
+        "joy": {
+            "joy", "happy", "happiness", "relief", "gratitude", "hope", "delight",
+            "contentment", "peace", "satisfaction", "triumph", "warmth"
+        },
+        "fear": {"fear", "anxiety", "dread", "terror", "worry", "panic"},
+        "anger": {"anger", "rage", "frustration", "resentment", "irritation"},
+    }
+    for family, labels in groups.items():
+        if e in labels:
+            return family
+    return e
+
+
+def _emotion_compatible(final_emotion: str, target_emotion: str) -> bool:
+    """Return True when the final emotion is a valid subtype of the target ending emotion."""
+    target = _ending_synonym(target_emotion)
+    final = _ending_synonym(final_emotion)
+    if final == target:
+        return True
+    return _emotion_family(final) == _emotion_family(target)
+
+
+
 def _target_family(target: str) -> str:
     t = _ending_synonym(target)
     if t in {"joy", "relief", "gratitude", "hope", "happiness"}:
@@ -838,8 +869,38 @@ Strict requirements:
         if len(states) != num_frames or len(intensities) != num_frames:
             raise RuntimeError(f"Emotion arc length mismatch. states={len(states)}, intensities={len(intensities)}, expected={num_frames}")
         target = _ending_synonym(getattr(dce_plan, "target_ending_emotion", getattr(seed, "target_ending_emotion", "")))
-        if _ending_synonym(states[-1]) != target and target not in str(states[-1]).lower():
-            raise RuntimeError(f"Final emotion state does not match target. final={states[-1]}, target={target}")
+        final_state_original = str(states[-1])
+
+        # Strict but semantically correct ending-emotion validation:
+        # fine-grained labels such as "regret" are valid subtypes of a sad ending,
+        # and "relief/gratitude" are valid subtypes of a happy ending.
+        if not _emotion_compatible(final_state_original, target):
+            repair_prompt = (
+                prompt
+                + "\n\nREPAIR: The final emotion state is not compatible with the target ending emotion. "
+                + f"Target ending emotion is `{target}`. Return the emotion arc again with exactly {num_frames} states "
+                + f"and make the final state semantically compatible with `{target}`."
+            )
+            data = self._llm_json_strict(
+                repair_prompt,
+                stage="repair_emotion_arc_target_alignment",
+                max_tokens=1000,
+                temperature=0.0,
+                repair_hint=f"Final state must be compatible with target ending emotion: {target}.",
+            )
+            states = data.get("states", [])
+            intensities = data.get("intensities", [])
+            if len(states) != num_frames or len(intensities) != num_frames:
+                raise RuntimeError(f"Emotion arc repair length mismatch. states={len(states)}, intensities={len(intensities)}, expected={num_frames}")
+            final_state_original = str(states[-1])
+            if not _emotion_compatible(final_state_original, target):
+                raise RuntimeError(f"Final emotion state does not match target family. final={states[-1]}, target={target}")
+
+        # Normalize the final label to the requested target for downstream strict checks,
+        # while preserving the LLM's fine-grained label as final_emotion_subtype.
+        final_emotion_subtype = final_state_original
+        states = list(states)
+        states[-1] = target
 
         return _safe_make(
             EmotionArc,
@@ -850,6 +911,9 @@ Strict requirements:
                 "valence_curve": data.get("valence_curve", []),
                 "arousal_curve": data.get("arousal_curve", []),
                 "suspense_curve": data.get("suspense_curve", []),
+                "target_ending_emotion": target,
+                "final_emotion_subtype": final_emotion_subtype,
+                "emotion_family": _emotion_family(target),
             },
         )
 
