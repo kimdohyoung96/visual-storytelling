@@ -823,81 +823,111 @@ Strict requirements:
 
     def _repair_storyboard_with_api(self, seed: StorySeed, abstract: str, dce_plan: DCEPlan, emotion_arc: EmotionArc, previous_response: Any, num_frames: int) -> List[Dict[str, Any]]:
         """
-        Strict API-based storyboard repair.
+        Strict API-based storyboard repair with exact frame count.
 
-        This is not DummyLLM and not static fallback.
-        It calls the configured API again and forces exact frame-level DCEE evidence schema.
+        This is not DummyLLM and not static fallback. It calls the API again.
         """
+        event_chain = getattr(dce_plan, "event_chain", getattr(dce_plan, "event_spine", [])) or []
+        states = list(getattr(emotion_arc, "states", []) or [])
+        intensities = list(getattr(emotion_arc, "intensities", []) or [])
+
+        frame_lines = []
+        for i in range(num_frames):
+            ev = event_chain[min(int(i * len(event_chain) / max(1, num_frames)), max(0, len(event_chain)-1))] if event_chain else {}
+            if not isinstance(ev, dict):
+                ev = {"event": str(ev), "visual_grounding": str(ev), "key_objects": [], "evidence_objects": []}
+            frame_lines.append(
+                f"Frame {i+1}: emotion={states[i] if i < len(states) else ''}, "
+                f"intensity={intensities[i] if i < len(intensities) else 3}, "
+                f"event_hint={ev.get('event','')}, "
+                f"grounding_hint={ev.get('visual_grounding','')}, "
+                f"objects={ev.get('key_objects',[])}, evidence={ev.get('evidence_objects',[])}"
+            )
+
+        skeleton = []
+        for i in range(num_frames):
+            skeleton.append({
+                "frame_id": i + 1,
+                "caption": f"visual caption for frame {i+1}",
+                "narrative_function": f"DCEE role for frame {i+1}",
+                "event": f"specific drawable event for frame {i+1}",
+                "event_causal_role": f"causal role for frame {i+1}",
+                "event_grounding": f"visible evidence of the event for frame {i+1}",
+                "emotion": states[i] if i < len(states) else "emotion",
+                "emotion_intensity": intensities[i] if i < len(intensities) else 3,
+                "key_objects": [f"concrete visible object for frame {i+1}"],
+                "evidence_objects": [f"visible evidence object for frame {i+1}"],
+                "must_show": [f"mandatory visible element for frame {i+1}"],
+                "visual_focus": f"main visual focus for frame {i+1}",
+                "protagonist_state": f"visible face/body state for frame {i+1}",
+                "desire_link": "connection to protagonist desire",
+                "conflict_level": min(5, max(1, round(1 + i * 4 / max(1, num_frames - 1)))),
+                "scene_location": "concrete location",
+                "weather": "visual weather",
+                "time_of_day": "visual time of day",
+                "atmosphere": "visual atmosphere",
+                "environment_details": ["background detail"],
+                "supporting_cast": ["visible supporting character if any"]
+            })
+
         payload = {
             "seed": _to_dict(seed),
             "abstract": abstract,
             "dce_plan": _to_dict(dce_plan),
             "emotion_arc": _to_dict(emotion_arc),
             "previous_response": previous_response,
-            "num_frames": num_frames,
+            "required_frame_count": num_frames,
+            "frame_requirements": frame_lines,
+            "required_json_skeleton": {"storyboard": skeleton},
         }
+
         prompt = f"""
-You are repairing storyboard output for the final DCEE-CausalVerse code.
+You are repairing storyboard output for DCEE-CausalVerse.
 
-The previous response did not contain a valid storyboard/frames list.
+The previous response did NOT contain exactly {num_frames} frames.
 
-Input:
+INPUT:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
-Return JSON only with this exact schema:
+Return JSON only.
+Top-level key must be "storyboard".
+"storyboard" must be a list of EXACTLY {num_frames} frame dictionaries.
+Do NOT return one frame.
+Do NOT return a summary.
+Do NOT skip any frame.
+Frame IDs must be 1 through {num_frames}.
 
-{{
-  "storyboard": [
-    {{
-      "frame_id": 1,
-      "caption": "one-sentence visual caption",
-      "narrative_function": "DCEE role of this frame",
-      "event": "specific drawable event from or derived from the selected event_chain",
-      "event_causal_role": "how this event affects desire/conflict/emotion",
-      "event_grounding": "exact visible evidence of the event in the image",
-      "emotion": "emotion state for this frame",
-      "emotion_intensity": 1,
-      "key_objects": ["concrete visible object"],
-      "evidence_objects": ["concrete visible clue/object that proves the event"],
-      "must_show": ["mandatory visible element 1", "mandatory visible element 2"],
-      "visual_focus": "main visual focus",
-      "protagonist_state": "visible body/face state of the protagonist",
-      "desire_link": "how this frame connects to the protagonist desire",
-      "conflict_level": 1,
-      "scene_location": "concrete location",
-      "weather": "visual weather",
-      "time_of_day": "visual time of day",
-      "atmosphere": "visual atmosphere",
-      "environment_details": ["background detail"],
-      "supporting_cast": ["character if visible"]
-    }}
-  ]
-}}
+Each frame must include:
+frame_id, caption, narrative_function, event, event_causal_role, event_grounding,
+emotion, emotion_intensity, key_objects, evidence_objects, must_show,
+visual_focus, protagonist_state, desire_link, conflict_level, scene_location,
+weather, time_of_day, atmosphere, environment_details, supporting_cast.
 
-Strict requirements:
-- Return exactly {num_frames} frames.
-- Each frame must have event, event_causal_role, event_grounding, emotion, emotion_intensity, key_objects, evidence_objects, must_show.
-- key_objects and evidence_objects must be non-empty concrete visible nouns.
-- Use the selected DCEE event_chain as the causal backbone.
-- Spread the event chain across the frames.
-- The final frame must visually support the target ending emotion.
-- For a woodcutter/axe/river story, use target-specific concrete visible evidence: for happy/relief use returned old axe, fairy reward, warm light, grateful smile; for sad/regret use empty hands, rain, kneeling body, lost axe absence.
-- Do not use generic phrases like "central problem", "conflict becomes visible", "object or place".
-- Return JSON only.
+key_objects and evidence_objects must be non-empty concrete visible nouns.
+Spread the selected DCEE event chain across all {num_frames} frames.
+For happy endings use visible reward/relief evidence.
+For sad endings use visible loss/consequence evidence.
+Do not use generic phrases: central problem, conflict becomes visible, object or place.
 """.strip()
 
-        data = self._llm_json_strict(
-            prompt,
-            stage="repair_storyboard",
-            max_tokens=1800,
-            temperature=0.0,
-            repair_hint="Return {'storyboard': [...]} with exact frame count and concrete evidence objects.",
-        )
-        frames = self._extract_storyboard_list(data)
-        if not frames:
-            raise RuntimeError("Storyboard repair returned no valid frames.")
-        return frames
+        last_error = ""
+        for attempt in range(3):
+            p = prompt
+            if attempt:
+                p += f"\n\nPrevious repair invalid: {last_error}. Return EXACTLY {num_frames} frames, not one."
+            data = self._llm_json_strict(
+                p,
+                stage=f"repair_storyboard_exact_count_attempt_{attempt+1}",
+                max_tokens=2200,
+                temperature=0.0,
+                repair_hint=f"Return {{'storyboard': [frame1..frame{num_frames}]}} exactly.",
+            )
+            frames = self._extract_storyboard_list(data)
+            if len(frames) == num_frames and not _contains_generic_text(frames):
+                return frames
+            last_error = f"got={len(frames)}, expected={num_frames}, generic={_contains_generic_text(frames)}"
 
+        raise RuntimeError(f"Storyboard repair failed exact frame count after API retries: {last_error}")
 
     def generate_storyboard(self, seed: StorySeed, abstract: str, dce_plan: DCEPlan, emotion_arc: EmotionArc) -> List[StoryboardFrame]:
         states = getattr(emotion_arc, "states", [])
