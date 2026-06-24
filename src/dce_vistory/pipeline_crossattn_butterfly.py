@@ -106,7 +106,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         self.image_understanding = ImageUnderstandingModule(iu_cfg.get('provider', 'llm_caption'), self.llm, iu_cfg.get('caption_model', 'Salesforce/blip-image-captioning-base'))
 
         ev_cfg = cfg.get('evaluation', {})
-        self.evaluator = DCEQAEvaluator(self.llm, self.vlm, use_vlm=bool(ev_cfg.get('use_vlm', False)), save_contact_sheet=bool(ev_cfg.get('save_contact_sheet', True)))
+        self.evaluator = DCEQAEvaluator(self.llm, self.vlm, use_vlm=bool(ev_cfg.get('use_vlm', False)), save_contact_sheet=bool(ev_cfg.get('save_contact_sheet', True)), use_local_caption_scorer=bool(ev_cfg.get('use_local_caption_scorer', True)))
 
         b_cfg = cfg.get('butterfly', {})
         self.controller = ButterflyController(b_cfg.get('quality_suffix', QUALITY_SUFFIX), b_cfg.get('negative_prompt', NEGATIVE_PROMPT), int(b_cfg.get('num_hypotheses', 3)))
@@ -208,14 +208,14 @@ class CrossAttentionButterflyDCEViStoryPipeline:
 
         img_cfg = self.cfg.get('image_generator', {})
         pipe_cfg = self.cfg.get('pipeline', {})
-        num_candidates = int(img_cfg.get('num_candidates_per_frame', 3))
-        num_ending_candidates = int(img_cfg.get('num_ending_candidates', 5))
+        num_candidates = int(img_cfg.get('num_candidates_per_frame', 4))
+        num_ending_candidates = int(img_cfg.get('num_ending_candidates', 6))
         retry_enabled = bool(pipe_cfg.get('emotion_retry', True))
         emotion_threshold = float(pipe_cfg.get('emotion_visibility_threshold', 0.76))
         color_threshold = float(pipe_cfg.get('colorfulness_threshold', 0.35))
-        event_threshold = float(pipe_cfg.get('event_grounding_threshold', 0.70))
-        evidence_threshold = float(pipe_cfg.get('evidence_visibility_threshold', 0.68))
-        story_threshold = float(pipe_cfg.get('story_alignment_threshold', 0.72))
+        event_threshold = float(pipe_cfg.get('event_grounding_threshold', 0.72))
+        evidence_threshold = float(pipe_cfg.get('evidence_visibility_threshold', 0.70))
+        story_threshold = float(pipe_cfg.get('story_alignment_threshold', 0.74))
         continuity_threshold = float(pipe_cfg.get('continuity_threshold', 0.68))
 
         style = sample.get('style', 'full-color cinematic storybook illustration')

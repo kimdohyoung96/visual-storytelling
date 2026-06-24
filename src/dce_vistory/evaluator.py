@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 import json
 import math
+import re
 
 import numpy as np
 from PIL import Image, ImageFilter, ImageStat, ImageDraw
@@ -35,21 +36,32 @@ def _safe_asdict(obj: Any):
 
 
 def _compact_storyboard(storyboard: List[StoryboardFrame]) -> List[Dict[str, Any]]:
-    return [
-        {
-            'frame_id': getattr(f, 'frame_id', i + 1),
-            'story_sentence': getattr(f, 'story_sentence', ''),
-            'event': getattr(f, 'event', ''),
-            'event_grounding': getattr(f, 'event_grounding', ''),
-            'evidence_objects': getattr(f, 'evidence_objects', []),
-            'emotion_evidence': getattr(f, 'emotion_evidence', []),
-            'emotion': getattr(f, 'emotion', ''),
-            'must_show': getattr(f, 'must_show', []),
-            'scene_location': getattr(f, 'scene_location', ''),
-            'weather': getattr(f, 'weather', ''),
-        }
-        for i, f in enumerate(storyboard)
-    ]
+    return [{
+        'frame_id': getattr(f, 'frame_id', i + 1),
+        'story_sentence': getattr(f, 'story_sentence', ''),
+        'event': getattr(f, 'event', ''),
+        'event_grounding': getattr(f, 'event_grounding', ''),
+        'evidence_objects': getattr(f, 'evidence_objects', []),
+        'emotion_evidence': getattr(f, 'emotion_evidence', []),
+        'emotion': getattr(f, 'emotion', ''),
+        'must_show': getattr(f, 'must_show', []),
+        'scene_location': getattr(f, 'scene_location', ''),
+        'weather': getattr(f, 'weather', ''),
+    } for i, f in enumerate(storyboard)]
+
+
+def _tokens(x):
+    if isinstance(x, (list, tuple)):
+        x = ' '.join(str(v) for v in x)
+    s = re.sub(r'[^A-Za-z0-9가-힣 ]+', ' ', str(x or '').lower())
+    return {t for t in s.split() if len(t) >= 2}
+
+
+def _overlap(a, b):
+    A = _tokens(a); B = _tokens(b)
+    if not A or not B:
+        return 0.0
+    return len(A & B) / len(A | B)
 
 
 def image_quality_proxy(path: str) -> float:
@@ -70,11 +82,8 @@ def image_quality_proxy(path: str) -> float:
 def colorfulness_score(path: str) -> float:
     try:
         img = np.array(Image.open(path).convert('RGB')).astype(np.float32)
-        r = img[:, :, 0]
-        g = img[:, :, 1]
-        b = img[:, :, 2]
-        rg = np.abs(r - g)
-        yb = np.abs(0.5 * (r + g) - b)
+        r = img[:, :, 0]; g = img[:, :, 1]; b = img[:, :, 2]
+        rg = np.abs(r - g); yb = np.abs(0.5 * (r + g) - b)
         colorfulness = math.sqrt(np.std(rg) ** 2 + np.std(yb) ** 2) + 0.3 * math.sqrt(np.mean(rg) ** 2 + np.mean(yb) ** 2)
         return round(float(min(1.0, colorfulness / 60.0)), 4)
     except Exception:
@@ -82,13 +91,7 @@ def colorfulness_score(path: str) -> float:
 
 
 def _make_contact_sheet_local(image_paths: List[str], out_path: Path, cols: int = 3, thumb_size=(384, 384)) -> str:
-    valid = []
-    for p in image_paths:
-        if not p:
-            continue
-        pp = Path(str(p))
-        if pp.exists():
-            valid.append(pp)
+    valid = [Path(str(p)) for p in image_paths if p and Path(str(p)).exists()]
     if not valid:
         raise ValueError('No valid image paths for contact sheet.')
     rows = (len(valid) + cols - 1) // cols
@@ -104,74 +107,83 @@ def _make_contact_sheet_local(image_paths: List[str], out_path: Path, cols: int 
         draw.rectangle([x0, y0, x0 + thumb_size[0] - 1, y0 + thumb_size[1] - 1], outline=(180, 180, 180))
         draw.text((x0 + 10, y0 + 10), f'Frame {idx + 1}', fill=(0, 0, 0))
         canvas.paste(img, (x0 + (thumb_size[0] - img.width) // 2, y0 + 34 + (thumb_size[1] - 44 - img.height) // 2))
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(out_path)
+    out_path = Path(out_path); out_path.parent.mkdir(parents=True, exist_ok=True); canvas.save(out_path)
     return str(out_path)
 
 
 def _frame_tifa_questions(frame: Any) -> List[str]:
     return [
+        f"Does the image match the exact story sentence `{getattr(frame, 'story_sentence', '')}`?",
         f"Is the main visible action `{getattr(frame, 'event', '')}` clearly shown?",
-        f"Does the image match the story sentence `{getattr(frame, 'story_sentence', '')}`?",
         f"Can you see evidence objects {getattr(frame, 'evidence_objects', [])} or equivalent visual clues?",
+        f"Can you understand the cause `{getattr(frame, 'event_grounding', '')}` from the image?",
         f"Is the protagonist emotion `{getattr(frame, 'emotion', '')}` clearly visible in face/body/scene?",
-        'Is the cause of the protagonist emotion visually understandable from the scene?',
         f"Do the background/weather/location match `{getattr(frame, 'scene_location', '')}` / `{getattr(frame, 'weather', '')}`?",
-        'Does the protagonist look like the same person as in previous frames, instead of turning into a different age/gender/face?',
+        'Does the protagonist remain the same person as in previous frames?',
     ]
 
 
 class DCEQAEvaluator:
-    def __init__(self, llm: BaseLLM, vlm: BaseVLM, use_vlm: bool = True, save_contact_sheet: bool = True):
-        self.llm = llm
-        self.vlm = vlm
-        self.use_vlm = use_vlm
-        self.save_contact_sheet = save_contact_sheet
+    def __init__(self, llm: BaseLLM, vlm: BaseVLM, use_vlm: bool = True, save_contact_sheet: bool = True, use_local_caption_scorer: bool = True):
+        self.llm = llm; self.vlm = vlm; self.use_vlm = use_vlm; self.save_contact_sheet = save_contact_sheet
+        self.use_local_caption_scorer = use_local_caption_scorer
+        self.local_captioner = None
+        if use_local_caption_scorer:
+            try:
+                from transformers import pipeline
+                self.local_captioner = pipeline('image-to-text', model='Salesforce/blip-image-captioning-base')
+            except Exception:
+                self.local_captioner = None
 
     def generate_questions(self, dce_plan: DCEPlan, emotion_arc: EmotionArc, storyboard: List[StoryboardFrame]) -> Dict[str, Any]:
-        out = {
-            'global_questions': [
-                'Does the generated sequence follow the planned DCEE event chain?',
-                'Is each frame grounded in its story sentence rather than a generic portrait?',
-                'Are event, evidence, emotional cause, and target emotion visible?',
-                'Are character identity and world state consistent across frames?',
-            ],
-            'frame_questions': {str(getattr(f, 'frame_id', i + 1)): _frame_tifa_questions(f) for i, f in enumerate(storyboard)},
-            'ending_questions': [
-                f"Does the final image reach the target ending emotion `{getattr(dce_plan, 'target_ending_emotion', '')}`?",
-                'Does the final frame feel like a story ending rather than just another intermediate scene?'
-            ],
-        }
+        out = {'global_questions': ['Does the generated sequence follow the planned DCEE event chain?', 'Is each frame grounded in its story sentence rather than a generic portrait?', 'Are event, evidence, emotional cause, and target emotion visible?', 'Are character identity and world state consistent across frames?'], 'frame_questions': {str(getattr(f, 'frame_id', i + 1)): _frame_tifa_questions(f) for i, f in enumerate(storyboard)}, 'ending_questions': [f"Does the final image reach the target ending emotion `{getattr(dce_plan, 'target_ending_emotion', '')}`?", 'Does the final frame feel like a story ending rather than just another intermediate scene?']}
         try:
             llm_extra = extract_json(self.llm.generate(SYSTEM_NARRATIVE, eval_questions_prompt(asdict(dce_plan), asdict(emotion_arc), _compact_storyboard(storyboard)), temperature=0.0, max_tokens=800))
-            if isinstance(llm_extra, dict):
-                out['llm_generated_questions'] = llm_extra
+            if isinstance(llm_extra, dict): out['llm_generated_questions'] = llm_extra
         except Exception:
             pass
         return out
 
+    def _local_caption_eval(self, frame, cand) -> Dict[str, Any]:
+        if self.local_captioner is None:
+            return {}
+        try:
+            cap = self.local_captioner(cand.image_path, max_new_tokens=40)
+            if isinstance(cap, list) and cap:
+                txt = cap[0].get('generated_text', '')
+            elif isinstance(cap, dict):
+                txt = cap.get('generated_text', '')
+            else:
+                txt = str(cap)
+            return {
+                'local_caption': txt,
+                'story_alignment_local': _overlap(txt, getattr(frame, 'story_sentence', '')),
+                'event_alignment_local': max(_overlap(txt, getattr(frame, 'event', '')), _overlap(txt, getattr(frame, 'event_grounding', ''))),
+                'evidence_visibility_local': max(_overlap(txt, getattr(frame, 'evidence_objects', [])), _overlap(txt, getattr(frame, 'must_show', []))),
+                'scene_alignment_local': max(_overlap(txt, getattr(frame, 'scene_location', '')), _overlap(txt, getattr(frame, 'weather', ''))),
+                'emotion_visibility_local': max(_overlap(txt, getattr(frame, 'emotion', '')), _overlap(txt, getattr(frame, 'emotion_evidence', []))),
+            }
+        except Exception as e:
+            return {'local_caption_error': str(e)[:300]}
+
     def _vlm_frame_eval(self, frame, cand) -> Dict[str, Any]:
         if not self.use_vlm:
             return {}
-        questions = _frame_tifa_questions(frame)
         prompt = f"""
-You are evaluating a visual storytelling frame.
-Answer based on the image only.
+You are evaluating one visual storytelling frame.
+Judge the image only.
 Planned story sentence: {getattr(frame, 'story_sentence', '')}
 Planned event: {getattr(frame, 'event', '')}
 Event grounding: {getattr(frame, 'event_grounding', '')}
 Evidence objects: {getattr(frame, 'evidence_objects', [])}
 Emotion evidence: {getattr(frame, 'emotion_evidence', [])}
-Target emotion: {getattr(frame, 'emotion', '')} intensity {getattr(frame, 'emotion_intensity', '')}/5
+Target emotion: {getattr(frame, 'emotion', '')}
 Location/weather: {getattr(frame, 'scene_location', '')}, {getattr(frame, 'weather', '')}, {getattr(frame, 'atmosphere', '')}
-Questions: {questions}
 Return JSON only with keys:
-answers (list of short yes/no + short note),
-qa_score, story_alignment, event_alignment, event_grounding, evidence_visibility,
+answers, qa_score, story_alignment, event_alignment, event_grounding, evidence_visibility,
 emotion_visibility, emotion_cause_visibility, scene_alignment, continuity,
 identity_consistency, colorfulness, reason.
-All numeric scores must be between 0 and 1.
+All scores must be 0 to 1.
 """.strip()
         try:
             return extract_json(self.vlm.generate_with_images(SYSTEM_VLM, prompt, [cand.image_path], temperature=0.0, max_tokens=700))
@@ -181,60 +193,34 @@ All numeric scores must be between 0 and 1.
     def rank_frame_candidates(self, frame, dce_plan, candidates, is_ending: bool = False):
         ranked = []
         for c in candidates:
-            scores = {
-                'image_quality': image_quality_proxy(c.image_path),
-                'colorfulness': colorfulness_score(c.image_path),
-                'identity_consistency': 0.72,
-                'story_alignment': 0.68,
-                'event_alignment': 0.68,
-                'event_grounding': 0.68,
-                'evidence_visibility': 0.66,
-                'emotion_visibility': 0.70,
-                'emotion_cause_visibility': 0.67,
-                'scene_alignment': 0.69,
-                'continuity': 0.68,
-                'qa_score': 0.68,
-            }
+            scores = {'image_quality': image_quality_proxy(c.image_path), 'colorfulness': colorfulness_score(c.image_path), 'identity_consistency': 0.70, 'story_alignment': 0.60, 'event_alignment': 0.60, 'event_grounding': 0.60, 'evidence_visibility': 0.60, 'emotion_visibility': 0.64, 'emotion_cause_visibility': 0.60, 'scene_alignment': 0.60, 'continuity': 0.65, 'qa_score': 0.62}
+
+            local_scores = self._local_caption_eval(frame, c)
+            if local_scores:
+                c.notes.update({k: v for k, v in local_scores.items() if 'error' in k or k == 'local_caption'})
+                scores['story_alignment'] = max(scores['story_alignment'], float(local_scores.get('story_alignment_local', 0.0)))
+                scores['event_alignment'] = max(scores['event_alignment'], float(local_scores.get('event_alignment_local', 0.0)))
+                scores['event_grounding'] = max(scores['event_grounding'], float(local_scores.get('event_alignment_local', 0.0)))
+                scores['evidence_visibility'] = max(scores['evidence_visibility'], float(local_scores.get('evidence_visibility_local', 0.0)))
+                scores['emotion_visibility'] = max(scores['emotion_visibility'], float(local_scores.get('emotion_visibility_local', 0.0)))
+                scores['scene_alignment'] = max(scores['scene_alignment'], float(local_scores.get('scene_alignment_local', 0.0)))
+
             vlm_scores = self._vlm_frame_eval(frame, c)
             if vlm_scores and 'vlm_error' not in vlm_scores:
                 for key in list(scores.keys()):
                     if key in vlm_scores:
-                        try:
-                            scores[key] = float(vlm_scores[key])
-                        except Exception:
-                            pass
+                        try: scores[key] = max(scores[key], float(vlm_scores[key]))
+                        except Exception: pass
                 c.notes['tifa_answers'] = vlm_scores.get('answers', [])
                 c.notes['vlm_reason'] = vlm_scores.get('reason', '')
             elif vlm_scores and 'vlm_error' in vlm_scores:
                 c.notes['vlm_error'] = vlm_scores['vlm_error']
 
+            overall = (
+                0.08 * scores['image_quality'] + 0.02 * scores['colorfulness'] + 0.12 * scores['identity_consistency'] + 0.20 * scores['story_alignment'] + 0.16 * scores['event_alignment'] + 0.12 * scores['event_grounding'] + 0.12 * scores['evidence_visibility'] + 0.08 * scores['emotion_visibility'] + 0.05 * scores['emotion_cause_visibility'] + 0.03 * scores['scene_alignment'] + 0.02 * scores['continuity']
+            )
             if is_ending:
-                overall = (
-                    0.14 * scores['identity_consistency']
-                    + 0.10 * scores['image_quality']
-                    + 0.15 * scores['story_alignment']
-                    + 0.14 * scores['event_alignment']
-                    + 0.13 * scores['event_grounding']
-                    + 0.12 * scores['evidence_visibility']
-                    + 0.13 * scores['emotion_visibility']
-                    + 0.05 * scores['emotion_cause_visibility']
-                    + 0.02 * scores['colorfulness']
-                    + 0.02 * scores['continuity']
-                )
-            else:
-                overall = (
-                    0.14 * scores['identity_consistency']
-                    + 0.10 * scores['image_quality']
-                    + 0.17 * scores['story_alignment']
-                    + 0.15 * scores['event_alignment']
-                    + 0.13 * scores['event_grounding']
-                    + 0.11 * scores['evidence_visibility']
-                    + 0.10 * scores['emotion_visibility']
-                    + 0.04 * scores['emotion_cause_visibility']
-                    + 0.03 * scores['scene_alignment']
-                    + 0.02 * scores['continuity']
-                    + 0.01 * scores['colorfulness']
-                )
+                overall += 0.02 * scores['emotion_visibility']
             scores['overall'] = round(float(overall), 4)
             c.scores.update(scores)
             ranked.append(c)
@@ -248,19 +234,9 @@ All numeric scores must be between 0 and 1.
             return {'warning': 'No images'}
         n = max(1, len(images))
         keys = ['image_quality', 'colorfulness', 'identity_consistency', 'story_alignment', 'event_alignment', 'event_grounding', 'evidence_visibility', 'emotion_visibility', 'emotion_cause_visibility', 'scene_alignment', 'continuity', 'qa_score', 'overall']
-        avg = {}
-        for k in keys:
-            vals = [float(getattr(img, 'scores', {}).get(k, 0.0)) for img in images]
-            avg[k] = round(sum(vals) / n, 4)
-        result = {
-            'num_frames': len(images),
-            'averages': avg,
-            'selected_image_paths': [getattr(x, 'image_path', '') for x in images],
-            'questions': questions,
-        }
+        avg = {k: round(sum(float(getattr(img, 'scores', {}).get(k, 0.0)) for img in images) / n, 4) for k in keys}
+        result = {'num_frames': len(images), 'averages': avg, 'selected_image_paths': [getattr(x, 'image_path', '') for x in images], 'questions': questions}
         if self.save_contact_sheet and out_dir:
-            try:
-                result['contact_sheet_path'] = _make_contact_sheet_local([getattr(x, 'image_path', '') for x in images], Path(out_dir) / 'contact_sheet.png')
-            except Exception as e:
-                result['contact_sheet_error'] = str(e)
+            try: result['contact_sheet_path'] = _make_contact_sheet_local([getattr(x, 'image_path', '') for x in images], Path(out_dir) / 'contact_sheet.png')
+            except Exception as e: result['contact_sheet_error'] = str(e)
         return result

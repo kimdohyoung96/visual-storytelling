@@ -1171,20 +1171,10 @@ Strict requirements:
                 num_frames,
             )
 
-        # Canonicalization is only a refinement stage.
-        # If it fails to preserve exact frame count, keep the already-valid
-        # pre-canonicalized storyboard rows instead of stopping the run.
-        # This is not DummyLLM/static fallback: `rows` was API-generated and
-        # already passed exact-count and generic-text validation.
         if not isinstance(crows, list) or len(crows) != num_frames:
-            crows = rows
-
+            raise RuntimeError("Canonicalized storyboard invalid length or type even after strict API repair.")
         if _contains_generic_text(crows):
-            # If canonicalization introduced generic text, return to the validated original rows.
-            if not _contains_generic_text(rows) and isinstance(rows, list) and len(rows) == num_frames:
-                crows = rows
-            else:
-                raise RuntimeError("Canonicalized storyboard contains generic placeholder text even after strict API repair.")
+            raise RuntimeError("Canonicalized storyboard contains generic placeholder text even after strict API repair.")
 
         return self._postprocess_storyboard(crows, seed, dce_plan, emotion_arc, full_story)
 

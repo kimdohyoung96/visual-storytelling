@@ -37,8 +37,6 @@ def _safe_join(items):
 
 
 class ButterflyController:
-    """Story-faithful DCEE visual controller with ViSTA/StoryGen-style history conditioning."""
-
     def __init__(self, quality_suffix: str, negative_prompt: str, num_hypotheses: int = 3):
         self.quality_suffix = quality_suffix
         self.negative_prompt = negative_prompt
@@ -53,18 +51,14 @@ class ButterflyController:
         if profile is None and getattr(seed, 'character_profiles', None):
             profile = seed.character_profiles[0]
         if profile is None:
-            return CharacterLatent(
-                name=getattr(seed, 'protagonist', 'protagonist'),
-                role='protagonist',
-                identity_prompt=f"same protagonist identity: {getattr(seed,'protagonist','protagonist')}",
-            )
+            return CharacterLatent(name=getattr(seed, 'protagonist', 'protagonist'), role='protagonist', identity_prompt=f"same protagonist identity: {getattr(seed,'protagonist','protagonist')}")
         if hasattr(profile, 'to_prompt'):
             try:
                 ident = profile.to_prompt()
             except Exception:
                 ident = str(getattr(profile, 'identity_anchor_prompt', getattr(profile, 'name', 'protagonist')))
         else:
-            ident = '; '.join(str(getattr(profile, k, '')) for k in ['name', 'role', 'face', 'hair', 'body', 'outfit', 'identity_anchor_prompt'] if getattr(profile, k, ''))
+            ident = '; '.join(str(getattr(profile, k, '')) for k in ['name', 'role', 'age', 'gender', 'face', 'hair', 'body', 'outfit', 'identity_anchor_prompt'] if getattr(profile, k, ''))
         return CharacterLatent(
             name=getattr(profile, 'name', getattr(seed, 'protagonist', 'protagonist')),
             role=getattr(profile, 'role', 'protagonist'),
@@ -83,12 +77,7 @@ class ButterflyController:
             time_of_day=getattr(frame, 'time_of_day', '') or 'cinematic story time',
             weather=getattr(frame, 'weather', '') or world_rule.get('weather', 'cinematic weather'),
             atmosphere=getattr(frame, 'atmosphere', '') or world_rule.get('environment', 'emotionally meaningful atmosphere'),
-            environment_details=list(getattr(frame, 'environment_details', []) or []) + [
-                world_rule.get('environment', 'story-relevant environment'),
-                f"lighting: {getattr(frame,'lighting_style','') or world_rule.get('lighting','')}",
-                f"color palette: {getattr(frame,'color_palette','') or world_rule.get('color','')}",
-                f"composition: {getattr(frame,'composition_rule','') or world_rule.get('composition','')}",
-            ],
+            environment_details=list(getattr(frame, 'environment_details', []) or []) + [world_rule.get('environment', 'story-relevant environment'), f"lighting: {getattr(frame,'lighting_style','') or world_rule.get('lighting','')}", f"color palette: {getattr(frame,'color_palette','') or world_rule.get('color','')}", f"composition: {getattr(frame,'composition_rule','') or world_rule.get('composition','')}"],
             scene_transition=getattr(frame, 'scene_transition', ''),
             symbolic_objects=_normalize_symbolic_objects(getattr(seed, 'visual_symbols', {}) if hasattr(seed, 'visual_symbols') else {}),
         )
@@ -102,15 +91,8 @@ class ButterflyController:
             color_rule=getattr(frame, 'color_palette', '') or world_rule.get('color', ''),
             composition_rule=getattr(frame, 'composition_rule', '') or world_rule.get('composition', ''),
         )
-
         intensity = max(1, min(5, emotion.intensity))
-        adapter_weights = {
-            'character_adapter': 0.25,
-            'world_adapter': 0.17,
-            'emotion_adapter': 0.17 + 0.04 * intensity,
-            'event_adapter': 0.22,
-            'evidence_adapter': 0.23,
-        }
+        adapter_weights = {'character_adapter': 0.24, 'world_adapter': 0.16, 'emotion_adapter': 0.18 + 0.04 * intensity, 'event_adapter': 0.24, 'evidence_adapter': 0.24}
 
         identity_lock = getattr(frame, 'identity_lock', {}) or {}
         identity_lock_text = '; '.join(f"{k}: {v}" for k, v in identity_lock.items() if v)
@@ -132,24 +114,9 @@ class ButterflyController:
             prev_text = f"previous frame event={getattr(previous_frame,'event','')}; previous emotion={getattr(previous_frame,'emotion','')}; progress the story forward instead of repeating the same pose or action."
 
         story_text = f"story sentence: {getattr(frame,'story_sentence','')}; alignment reason: {getattr(frame,'story_alignment_reason','')}; caption: {getattr(frame,'caption','')}"
-        frame_goal_text = (
-            f"Frame goal: visualize exactly this narrative beat -> {getattr(frame,'story_sentence','')}. "
-            f"The visible scene must clearly show the event `{getattr(frame,'event','')}` and why the protagonist feels `{getattr(frame,'emotion','')}`."
-        )
-        event_text = (
-            f"DCEE visible event: {getattr(frame,'event','')}; "
-            f"causal role: {getattr(frame,'event_causal_role','')}; "
-            f"event grounding: {getattr(frame,'event_grounding','')}; "
-            f"narrative function: {getattr(frame,'narrative_function','')}"
-        )
-        evidence_text = (
-            f"key objects: {getattr(frame,'key_objects',[])}; "
-            f"visual evidence objects: {getattr(frame,'evidence_objects',[])}; "
-            f"emotion evidence: {getattr(frame,'emotion_evidence',[])}; "
-            f"must show: {getattr(frame,'must_show',[])}; "
-            f"visual focus: {getattr(frame,'visual_focus','')}; "
-            f"scene must show both the event and the visible cause of the protagonist emotion"
-        )
+        frame_goal_text = f"Frame goal: visualize exactly this narrative beat -> {getattr(frame,'story_sentence','')}. The visible scene must clearly show the event `{getattr(frame,'event','')}` and why the protagonist feels `{getattr(frame,'emotion','')}`."
+        event_text = f"DCEE visible event: {getattr(frame,'event','')}; causal role: {getattr(frame,'event_causal_role','')}; event grounding: {getattr(frame,'event_grounding','')}; narrative function: {getattr(frame,'narrative_function','')}"
+        evidence_text = f"key objects: {getattr(frame,'key_objects',[])}; visual evidence objects: {getattr(frame,'evidence_objects',[])}; emotion evidence: {getattr(frame,'emotion_evidence',[])}; must show: {getattr(frame,'must_show',[])}; visual focus: {getattr(frame,'visual_focus','')}; scene must show both the event and the visible cause of the protagonist emotion"
         world_text = world.to_prompt()
         emotion_text = emotion.to_prompt()
 
@@ -175,13 +142,7 @@ Requirements:
 4. The background, weather, lighting, and camera framing must support the specific narrative beat.
 5. Advance the story from the previous frame; do not repeat the same static composition.
 """.strip()
-
-        negative = (
-            self.negative_prompt
-            + '; ' + character.negative_prompt
-            + '; generic portrait only, static pose repetition, missing event, missing evidence, weak emotion, missing visual cause, empty background, inconsistent protagonist, child version, older version, gender changed, grayscale, monochrome'
-        )
-
+        negative = self.negative_prompt + '; ' + character.negative_prompt + '; generic portrait only, static pose repetition, missing event, missing evidence, weak emotion, missing visual cause, empty background, inconsistent protagonist, child version, older version, gender changed, grayscale, monochrome'
         return VisualControlPacket(
             frame_id=int(getattr(frame, 'frame_id', 0)),
             positive_prompt=positive,
@@ -205,6 +166,10 @@ Requirements:
                 'emotion_evidence': getattr(frame, 'emotion_evidence', []),
                 'must_show': getattr(frame, 'must_show', []),
                 'story_sentence': getattr(frame, 'story_sentence', ''),
+                'visual_focus': getattr(frame, 'visual_focus', ''),
+                'camera_shot': getattr(frame, 'camera_shot', ''),
+                'key_objects': getattr(frame, 'key_objects', []),
+                'frame': {'frame_id': getattr(frame, 'frame_id', 0), 'narrative_function': getattr(frame, 'narrative_function', ''), 'event': getattr(frame, 'event', ''), 'event_grounding': getattr(frame, 'event_grounding', ''), 'emotion': getattr(frame, 'emotion', ''), 'emotion_intensity': getattr(frame, 'emotion_intensity', 3), 'conflict_level': getattr(frame, 'conflict_level', 3), 'story_sentence': getattr(frame, 'story_sentence', ''), 'must_show': getattr(frame, 'must_show', []), 'camera_shot': getattr(frame, 'camera_shot', ''), 'visual_focus': getattr(frame, 'visual_focus', ''), 'scene_location': getattr(frame, 'scene_location', ''), 'weather': getattr(frame, 'weather', ''), 'atmosphere': getattr(frame, 'atmosphere', '')},
                 'world': asdict(world),
                 'emotion': asdict(emotion),
                 'character': asdict(character),
