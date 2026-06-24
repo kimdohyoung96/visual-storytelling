@@ -1,0 +1,17 @@
+# Recommended config changes
+
+evaluation:
+  use_vlm: true
+  use_local_caption_scorer: true
+  save_contact_sheet: true
+
+image_generator:
+  num_candidates_per_frame: 4
+  num_ending_candidates: 6
+
+pipeline:
+  emotion_retry: true
+  story_alignment_threshold: 0.74
+  event_grounding_threshold: 0.72
+  evidence_visibility_threshold: 0.70
+  continuity_threshold: 0.68
