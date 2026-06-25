@@ -1,0 +1,20 @@
+image_generator:
+  use_ip_adapter: true
+  ip_adapter_repo: h94/IP-Adapter
+  ip_adapter_subfolder: sdxl_models
+  ip_adapter_weight_name: ip-adapter_sdxl.bin
+  ip_adapter_scale: 0.62
+  num_candidates_per_frame: 4
+  num_ending_candidates: 6
+
+evaluation:
+  use_vlm: true
+  use_local_caption_scorer: true
+  save_contact_sheet: true
+
+pipeline:
+  emotion_retry: true
+  story_alignment_threshold: 0.74
+  event_grounding_threshold: 0.72
+  evidence_visibility_threshold: 0.70
+  continuity_threshold: 0.68
