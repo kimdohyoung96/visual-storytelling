@@ -109,6 +109,7 @@ class ButterflyController:
         continuity = (memory or {}).get('continuity_constraints', {}) or {}
         continuity_text = '; '.join(f"{k}: {v}" for k, v in continuity.items() if v)
         anchor_text = str(anchors or {})
+        source_reference_image_path = getattr(seed, 'source_image_path', '') or getattr(seed, 'image_path', '')
         prev_text = ''
         if previous_frame is not None:
             prev_text = f"previous frame event={getattr(previous_frame,'event','')}; previous emotion={getattr(previous_frame,'emotion','')}; progress the story forward instead of repeating the same pose or action."
@@ -173,6 +174,7 @@ Requirements:
                 'world': asdict(world),
                 'emotion': asdict(emotion),
                 'character': asdict(character),
+                'source_reference_image_path': source_reference_image_path,
             },
-            reference_images={},
+            reference_images={'subject': source_reference_image_path} if source_reference_image_path else {},
         )

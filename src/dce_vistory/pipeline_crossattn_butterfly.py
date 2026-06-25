@@ -128,6 +128,11 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             emotion_tokens=int(ad_cfg.get('emotion_tokens', 8)),
             event_tokens=int(ad_cfg.get('event_tokens', 8)),
             evidence_tokens=int(ad_cfg.get('evidence_tokens', 8)),
+            use_ip_adapter=bool(img_cfg.get('use_ip_adapter', True)),
+            ip_adapter_repo=img_cfg.get('ip_adapter_repo', 'h94/IP-Adapter'),
+            ip_adapter_subfolder=img_cfg.get('ip_adapter_subfolder', 'sdxl_models'),
+            ip_adapter_weight_name=img_cfg.get('ip_adapter_weight_name', 'ip-adapter_sdxl.bin'),
+            ip_adapter_scale=float(img_cfg.get('ip_adapter_scale', 0.62)),
         )
 
     def _strengthen_packet(self, packet, frame, best_candidate=None, selected_memory=None):
@@ -186,6 +191,10 @@ class CrossAttentionButterflyDCEViStoryPipeline:
 
         image_summary = self.image_understanding.analyze(sample.get('image_path'), sample)
         seed = self.planner.build_seed(sample, image_summary)
+        try:
+            setattr(seed, 'source_image_path', sample.get('image_path', '') or '')
+        except Exception:
+            pass
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, int(sample.get('num_frames', 6)))
