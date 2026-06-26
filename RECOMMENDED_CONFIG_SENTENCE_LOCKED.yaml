@@ -1,0 +1,25 @@
+image_generator:
+  use_ip_adapter: true
+  ip_adapter_repo: h94/IP-Adapter
+  ip_adapter_subfolder: sdxl_models
+  ip_adapter_weight_name: ip-adapter_sdxl.bin
+  ip_adapter_scale: 0.38
+
+  # Important: disable untrained ButterflyAdapterStack unless you have a trained checkpoint.
+  use_butterfly_adapter: false
+
+  num_candidates_per_frame: 5
+  num_ending_candidates: 6
+  guidance_scale: 8.5
+
+evaluation:
+  use_vlm: true
+  use_local_caption_scorer: true
+  save_contact_sheet: true
+
+pipeline:
+  emotion_retry: true
+  story_alignment_threshold: 0.76
+  event_grounding_threshold: 0.72
+  evidence_visibility_threshold: 0.70
+  continuity_threshold: 0.68
