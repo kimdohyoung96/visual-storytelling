@@ -132,7 +132,8 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             ip_adapter_repo=img_cfg.get('ip_adapter_repo', 'h94/IP-Adapter'),
             ip_adapter_subfolder=img_cfg.get('ip_adapter_subfolder', 'sdxl_models'),
             ip_adapter_weight_name=img_cfg.get('ip_adapter_weight_name', 'ip-adapter_sdxl.bin'),
-            ip_adapter_scale=float(img_cfg.get('ip_adapter_scale', 0.62)),
+            ip_adapter_scale=float(img_cfg.get('ip_adapter_scale', 0.38)),
+            use_butterfly_adapter=bool(img_cfg.get('use_butterfly_adapter', False)),
         )
 
     def _strengthen_packet(self, packet, frame, best_candidate=None, selected_memory=None):
@@ -180,6 +181,38 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             candidate_plans = {'note': 'No explicit candidate plan list was attached by planner.py.', 'selected_event_chain': getattr(dce_plan, 'event_chain', getattr(dce_plan, 'event_spine', []))}
         _write_json(out_dir / 'dcee_candidate_plans.json', candidate_plans)
 
+
+    def _enforce_sentence_frame_lock(self, storyboard, full_story, seed):
+        """
+        The full story is the source of truth for visual storytelling.
+        Sentence i must be visualized by frame i.
+        """
+        rows = (full_story or {}).get("sentences", []) if isinstance(full_story, dict) else []
+        total = len(storyboard)
+        try:
+            setattr(seed, "_current_full_story", full_story)
+            setattr(seed, "_total_frames", total)
+        except Exception:
+            pass
+
+        for idx, frame in enumerate(storyboard):
+            sentence = ""
+            if idx < len(rows) and isinstance(rows[idx], dict):
+                sentence = str(rows[idx].get("sentence", "")).strip()
+            if sentence:
+                try:
+                    setattr(frame, "story_sentence", sentence)
+                    setattr(frame, "caption", sentence)
+                    setattr(frame, "sentence_frame_id", idx + 1)
+                    setattr(frame, "sentence_locked", True)
+                except Exception:
+                    pass
+            try:
+                setattr(frame, "frame_id", idx + 1)
+            except Exception:
+                pass
+        return storyboard
+
     def run(self, sample: Dict[str, Any], out_dir: Path) -> PipelineResult:
         out_dir = Path(out_dir)
         frames_dir = out_dir / 'frames'
@@ -200,6 +233,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, int(sample.get('num_frames', 6)))
         full_story = self.planner.generate_full_story(seed, abstract, dce_plan, emotion_arc, int(sample.get('num_frames', 6)))
         storyboard = self.planner.generate_storyboard(seed, abstract, dce_plan, emotion_arc, full_story=full_story)
+        storyboard = self._enforce_sentence_frame_lock(storyboard, full_story, seed)
         self._save_core_plan_outputs(out_dir, seed, abstract, full_story, dce_plan, emotion_arc, storyboard)
 
         memory = DCEECausalMemoryStore()

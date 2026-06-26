@@ -4,6 +4,7 @@ from dataclasses import asdict
 from typing import Any, Dict
 from .emotion_world_rules import get_world_rule
 from .latent_schema import CharacterLatent, WorldLatent, EmotionLatent, VisualControlPacket
+from .frame_director import build_frame_visual_spec
 
 
 def _normalize_symbolic_objects(value):
@@ -110,6 +111,7 @@ class ButterflyController:
         continuity_text = '; '.join(f"{k}: {v}" for k, v in continuity.items() if v)
         anchor_text = str(anchors or {})
         source_reference_image_path = getattr(seed, 'source_image_path', '') or getattr(seed, 'image_path', '')
+        frame_visual_spec = build_frame_visual_spec(frame, seed, getattr(seed, '_current_full_story', None), int(getattr(frame, 'frame_id', 1)) - 1, int(getattr(seed, '_total_frames', 6)), source_reference_image_path)
         prev_text = ''
         if previous_frame is not None:
             prev_text = f"previous frame event={getattr(previous_frame,'event','')}; previous emotion={getattr(previous_frame,'emotion','')}; progress the story forward instead of repeating the same pose or action."
@@ -175,6 +177,7 @@ Requirements:
                 'emotion': asdict(emotion),
                 'character': asdict(character),
                 'source_reference_image_path': source_reference_image_path,
+                'frame_visual_spec': frame_visual_spec.to_dict(),
             },
             reference_images={'subject': source_reference_image_path} if source_reference_image_path else {},
         )
