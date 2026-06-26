@@ -26,6 +26,7 @@ from .prompts import (
     choose_camera_distance,
 )
 from .utils import extract_json
+from .visual_sentence_planner import visual_story_rewrite_prompt, normalize_visual_rows, is_image_friendly_sentence
 
 
 def _field_names(cls) -> set[str]:
@@ -625,7 +626,65 @@ Strict requirements:
                 "emotion": _clean_text(row.get("emotion") or (states[idx] if idx < len(states) else "")),
                 "alignment_reason": _clean_text(row.get("alignment_reason") or row.get("why") or f"Frame {idx+1} visualizes sentence {idx+1} in the story timeline."),
             })
-        return {"story_title": parsed.get("story_title", ""), "sentences": normalized}
+        full_story = {"story_title": parsed.get("story_title", ""), "sentences": normalized}
+        return self._make_full_story_image_friendly(seed, dce_plan, emotion_arc, full_story, num_frames)
+
+
+
+    def _make_full_story_image_friendly(self, seed: StorySeed, dce_plan: DCEPlan, emotion_arc: EmotionArc, full_story: Dict[str, Any], num_frames: int) -> Dict[str, Any]:
+        """
+        Rewrite the narrative story into image-friendly sentence-frame units.
+        The rewritten sentences become the source of truth for image generation.
+        """
+        rows = full_story.get("sentences", []) if isinstance(full_story, dict) else []
+        needs_rewrite = True
+        if len(rows) == num_frames:
+            needs_rewrite = not all(is_image_friendly_sentence(str(r.get("sentence", ""))) for r in rows if isinstance(r, dict))
+
+        # Always rewrite once for visual generation: the planner story can be literary,
+        # but SDXL needs simple drawable sentences.
+        prompt = visual_story_rewrite_prompt(_to_dict(seed), _to_dict(dce_plan), _to_dict(emotion_arc), full_story, num_frames)
+        data = self._llm_json_strict(
+            prompt,
+            stage="rewrite_full_story_image_friendly",
+            max_tokens=1800,
+            temperature=0.0,
+            repair_hint=f"Return exact JSON with {num_frames} image-friendly sentence items.",
+        )
+        visual_rows = normalize_visual_rows(data, num_frames)
+
+        if len(visual_rows) != num_frames or not all(r.get("sentence") for r in visual_rows):
+            repair_prompt = prompt + (
+                "\n\nREPAIR: Return EXACTLY "
+                + str(num_frames)
+                + " items. Each sentence must be 8-16 words, one visible action, one location, one emotion cue."
+            )
+            data = self._llm_json_strict(
+                repair_prompt,
+                stage="repair_image_friendly_story",
+                max_tokens=1800,
+                temperature=0.0,
+                repair_hint=f"Return {num_frames} image-friendly visual sentences.",
+            )
+            visual_rows = normalize_visual_rows(data, num_frames)
+
+        if len(visual_rows) != num_frames:
+            raise RuntimeError(f"Image-friendly story count mismatch. got={len(visual_rows)}, expected={num_frames}")
+
+        # Attach original literary sentences for paper/debugging, but use visual rows as source of truth.
+        original_rows = full_story.get("sentences", []) if isinstance(full_story, dict) else []
+        for i, row in enumerate(visual_rows):
+            if i < len(original_rows) and isinstance(original_rows[i], dict):
+                row["original_sentence"] = original_rows[i].get("sentence", "")
+            row["sentence_frame_locked"] = True
+            row["image_friendly"] = True
+
+        return {
+            "story_title": full_story.get("story_title", "") if isinstance(full_story, dict) else "",
+            "story_mode": "image_friendly_sentence_locked",
+            "original_sentences": original_rows,
+            "sentences": visual_rows,
+        }
 
 
     # ------------------------------------------------------------------

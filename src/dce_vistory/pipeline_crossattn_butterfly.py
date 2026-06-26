@@ -371,6 +371,8 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         if isinstance(full_story, dict):
             for i, row in enumerate((full_story or {}).get('sentences', [])):
                 lines.append(f"  - [{row.get('frame_id', i+1)}] {row.get('sentence', '')}")
+                if row.get('original_sentence'):
+                    lines.append(f"    - Original: {row.get('original_sentence', '')}")
         lines += ['', '## Selected DCEE Plan\n', f"- Desire: {getattr(dce_plan, 'desire', '')}", f"- Conflict: {getattr(dce_plan, 'conflict', '')}", f"- Planning Structure: {getattr(dce_plan, 'planning_structure', 'DCEE: Desire-Conflict-Event-Ending Emotion')}", f"- Ending Emotion: {getattr(dce_plan, 'target_ending_emotion', '')}", '', '## Emotion Arc\n', f"- States: {' → '.join([str(x) for x in getattr(emotion_arc, 'states', [])])}", f"- Intensities: {' → '.join([str(x) for x in getattr(emotion_arc, 'intensities', [])])}", '']
         if evaluation.get('contact_sheet_path'):
             lines += ['## Contact Sheet\n', f"![Contact Sheet]({evaluation.get('contact_sheet_path')})", '']

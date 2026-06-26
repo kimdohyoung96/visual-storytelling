@@ -81,9 +81,8 @@ def _forbidden_for_subject(protagonist: str) -> List[str]:
 
 def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | None, frame_index: int, total_frames: int, reference_image_path: str = "") -> FrameVisualSpec:
     rows = (full_story or {}).get("sentences", []) if isinstance(full_story, dict) else []
-    story_sentence = ""
-    if frame_index < len(rows) and isinstance(rows[frame_index], dict):
-        story_sentence = clean(rows[frame_index].get("sentence"))
+    story_row = rows[frame_index] if frame_index < len(rows) and isinstance(rows[frame_index], dict) else {}
+    story_sentence = clean(story_row.get("image_sentence") or story_row.get("sentence"))
     story_sentence = story_sentence or clean(getattr(frame, "story_sentence", "")) or clean(getattr(frame, "caption", ""))
 
     protagonist = clean(getattr(seed, "protagonist", "")) or clean(getattr(frame, "protagonist", "")) or "protagonist"
@@ -102,16 +101,17 @@ def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | 
     subject_identity = "; ".join(identity_parts) or protagonist
 
     required_objects = unique(
-        as_list(getattr(frame, "must_show", []))
+        as_list(story_row.get("required_objects", []))
+        + as_list(story_row.get("subject", ""))
+        + as_list(story_row.get("object", ""))
         + as_list(getattr(frame, "key_objects", []))
-        + as_list(getattr(frame, "evidence_objects", []))
-        + as_list(getattr(frame, "emotion_evidence", [])),
-        10,
+        + as_list(getattr(frame, "evidence_objects", [])),
+        8,
     )
 
-    emotion = clean(getattr(frame, "emotion", ""))
-    event = clean(getattr(frame, "event", ""))
-    event_grounding = clean(getattr(frame, "event_grounding", ""))
+    emotion = clean(story_row.get("emotion")) or clean(getattr(frame, "emotion", ""))
+    event = clean(story_row.get("action")) or clean(getattr(frame, "event", ""))
+    event_grounding = clean(story_row.get("visible_cause") or story_row.get("action")) or clean(getattr(frame, "event_grounding", ""))
     visual_focus = clean(getattr(frame, "visual_focus", ""))
 
     camera = (
@@ -141,12 +141,12 @@ def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | 
         visible_cause=event_grounding or story_sentence,
         required_objects=required_objects,
         forbidden_objects=_forbidden_for_subject(protagonist),
-        location=clean(getattr(frame, "scene_location", "")) or clean(getattr(seed, "setting", "")),
+        location=clean(story_row.get("location")) or clean(getattr(frame, "scene_location", "")) or clean(getattr(seed, "setting", "")),
         weather=clean(getattr(frame, "weather", "")),
         atmosphere=clean(getattr(frame, "atmosphere", "")),
         emotion=emotion,
-        facial_expression=clean(getattr(frame, "facial_cue", "")) or f"facial expression clearly showing {emotion}",
-        body_pose=clean(getattr(frame, "body_cue", "")) or f"body pose clearly showing {emotion} while doing the action",
+        facial_expression=clean(story_row.get("facial_cue")) or clean(getattr(frame, "facial_cue", "")) or f"facial expression clearly showing {emotion}",
+        body_pose=clean(story_row.get("body_cue")) or clean(getattr(frame, "body_cue", "")) or f"body pose clearly showing {emotion} while doing the action",
         camera=camera + (f"; visual focus: {visual_focus}" if visual_focus else ""),
         continuity=continuity,
         negative=", ".join(_forbidden_for_subject(protagonist)),
