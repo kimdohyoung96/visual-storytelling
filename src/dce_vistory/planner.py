@@ -131,6 +131,64 @@ def _contains_forbidden(blob: Any, forbidden_terms: List[str]) -> bool:
     return any(term.lower() in text for term in forbidden_terms)
 
 
+_NEGATIVE_FIELD_NAMES = {
+    "absent_objects",
+    "forbidden_visuals",
+    "must_not_show",
+    "negative_prompt",
+    "negative_identity_prompt",
+    "forbidden_ungrounded_entities",
+}
+
+
+_POSITIVE_STORY_FIELD_NAMES = {
+    "sentence",
+    "image_sentence",
+    "image_sentence_en",
+    "subject",
+    "action",
+    "action_en",
+    "action_pose",
+    "action_pose_en",
+    "object",
+    "location",
+    "location_en",
+    "weather",
+    "atmosphere",
+    "emotion",
+    "visible_cause",
+    "visible_cause_en",
+    "state_before",
+    "state_after",
+    "required_objects",
+    "required_objects_en",
+    "background_elements",
+    "background_elements_en",
+    "supporting_cast",
+    "continuity_notes",
+    "camera_composition_en",
+    "characters", "objects", "setting", "mood", "world_context", "character_profiles",
+    "protagonist", "desire", "fear", "misbelief", "obstacle", "conflict", "event_chain", "event_spine", "turning_point", "ending_state", "moral_or_theme",
+}
+
+
+def _positive_story_blob(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Only fields that will actually be rendered in the story/image.
+
+    V24 prompts ask the LLM to fill `absent_objects` and `forbidden_visuals`.
+    Those fields intentionally contain words like "human", "extra character", or "second bear".
+    They must NOT trigger the forbidden-agent validator because they are negative constraints,
+    not positive story content.
+    """
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if k in _POSITIVE_STORY_FIELD_NAMES and k not in _NEGATIVE_FIELD_NAMES}
+
+
+def _contains_forbidden_positive_story(data: Dict[str, Any], forbidden_terms: List[str]) -> bool:
+    return _contains_forbidden(_positive_story_blob(data), forbidden_terms)
+
+
 def _replace_forbidden_text(text: str, forbidden_terms: List[str], protagonist: str) -> str:
     out = str(text or "")
     for term in forbidden_terms:
@@ -512,8 +570,8 @@ class DCEPlanner:
                     raise ValueError(f"missing key: {key}")
             if not _string_list(data.get("objects")):
                 raise ValueError("objects cannot be empty")
-            if _contains_forbidden(data, forbidden) or _contains_forbidden(data, list(_AGENT_WORDS)):
-                raise ValueError(f"contains forbidden ungrounded agents: {forbidden}")
+            if _contains_forbidden_positive_story(data, forbidden) or _contains_forbidden_positive_story(data, list(_AGENT_WORDS)):
+                raise ValueError(f"contains forbidden ungrounded agents in positive seed fields: {forbidden}")
 
         data = self._llm_json_strict(prompt, "build_seed", max_tokens=1200, validate=_validate, repair_hint="Use only grounded entities from the input/image summary.")
         protagonist = sample.get("protagonist", "protagonist")
@@ -581,8 +639,8 @@ class DCEPlanner:
             ev = data.get("event_chain", data.get("event_spine", []))
             if not ev:
                 raise ValueError("event_chain is empty")
-            if _contains_forbidden(data, forbidden) or _contains_forbidden(data, list(_AGENT_WORDS)):
-                raise ValueError("plan contains forbidden ungrounded agents")
+            if _contains_forbidden_positive_story(data, forbidden) or _contains_forbidden_positive_story(data, list(_AGENT_WORDS)):
+                raise ValueError("plan contains forbidden ungrounded agents in positive plan fields")
 
         data = self._llm_json_strict(prompt, "generate_dce_plan", max_tokens=1200, validate=_validate, repair_hint="Return one grounded DCEE plan using only the seed entities.")
         protagonist = getattr(seed, "protagonist", "protagonist")
@@ -652,14 +710,19 @@ class DCEPlanner:
                 data["background_elements"] = []
             if not _clean_text(data.get("sentence")):
                 raise ValueError("sentence is empty")
-            if _contains_forbidden(data, forbidden) or _contains_forbidden(data, list(_AGENT_WORDS)):
-                raise ValueError("story step contains forbidden ungrounded agents")
+            if _contains_forbidden_positive_story(data, forbidden) or _contains_forbidden_positive_story(data, list(_AGENT_WORDS)):
+                raise ValueError("story step contains forbidden ungrounded agents in positive story fields")
             if not _string_list(data.get("required_objects")):
                 data["required_objects"] = _derive_required_objects(data, seed, getattr(seed, "protagonist", "protagonist"))
 
         data = self._llm_json_strict(prompt, f"generate_story_step_{frame_index+1}", max_tokens=700, validate=_validate, repair_hint="Make the sentence easy to draw, grounded, single-scene, and free of ungrounded entities.")
         protagonist = getattr(seed, "protagonist", "protagonist")
+        # V24.1: sanitize positive story content, but keep negative constraints separately.
+        original_absent_objects = _string_list(data.get("absent_objects", []))
+        original_forbidden_visuals = _string_list(data.get("forbidden_visuals", []))
         data = _sanitize_nested(data, forbidden + list(_AGENT_WORDS), protagonist)
+        data["absent_objects"] = _unique(original_absent_objects)
+        data["forbidden_visuals"] = _unique(original_forbidden_visuals)
         data = _force_protagonist_only_step(data, protagonist)
 
         states = getattr(emotion_arc, "states", []) or []
