@@ -274,3 +274,145 @@ Story so far:
 Previous frame:
 {previous_frame}
 """.strip()
+
+
+# ---------------------------------------------------------------------
+# Backward-compatible prompt functions for evaluator / older modules
+# ---------------------------------------------------------------------
+def eval_questions_prompt(dce_plan: dict, emotion_arc: dict, storyboard: list) -> str:
+    return f"""
+Generate VQA-style questions for grounded V21 DCEE visual storytelling evaluation.
+Return valid JSON with keys: global_questions, frame_questions, ending_questions.
+
+Questions must cover:
+- whether each image matches the exact story sentence
+- whether each frame is one single coherent scene, not split-screen or multi-panel
+- whether the protagonist identity from the input image is preserved
+- whether protagonist species and visible color are preserved
+- whether the event/action is visible
+- whether required objects/background are visible
+- whether emotional expression and emotional cause are visible
+- whether frame-to-frame continuity is maintained
+
+DCEE plan:
+{dce_plan}
+
+Emotion arc:
+{emotion_arc}
+
+Storyboard:
+{storyboard}
+""".strip()
+
+
+def dcee_branch_plan_prompt(seed: dict, abstract: str, num_candidates: int = 4) -> str:
+    return dcee_plan_prompt(seed, abstract, forbidden_entities=[], protagonist_only=True)
+
+
+def dcee_candidate_selection_prompt(seed: dict, abstract: str, candidates: list) -> str:
+    return f"""
+Select the best grounded V21 DCEE plan candidate.
+Return valid JSON with keys: selected_candidate_id, scores, reason.
+Prefer the candidate that:
+- preserves the protagonist identity from the input image
+- avoids ungrounded secondary characters
+- creates a clear Desire-Conflict-Event-Ending Emotion chain
+- can be rendered as one single-scene image per frame
+
+Seed:
+{seed}
+
+Abstract:
+{abstract}
+
+Candidates:
+{candidates}
+""".strip()
+
+
+def dce_plan_prompt(seed: dict, abstract: str) -> str:
+    return dcee_plan_prompt(seed, abstract, forbidden_entities=[], protagonist_only=True)
+
+
+def emotion_delta_text(prev_emotion: str | None, cur_emotion: str, intensity: int) -> str:
+    if not prev_emotion:
+        return f"establish {cur_emotion} with visible intensity {intensity}/5"
+    if prev_emotion == cur_emotion:
+        return f"maintain {cur_emotion}, visible intensity {intensity}/5"
+    return f"visible transition from {prev_emotion} to {cur_emotion}; show it through face, body, lighting, weather, and story evidence"
+
+
+def storyboard_prompt(seed: dict, abstract: str, dce_plan: dict, emotion_arc: dict, num_frames: int) -> str:
+    return f"""
+Create a {num_frames}-frame grounded V21 storyboard.
+Each frame must be one single coherent scene.
+Each frame must include:
+- exact protagonist identity from input image
+- one visible action
+- one visible emotional state
+- required props/background only
+- no ungrounded secondary characters
+- no split-screen, comic panels, or multi-scene layout
+
+Seed:
+{seed}
+
+Abstract:
+{abstract}
+
+DCEE plan:
+{dce_plan}
+
+Emotion arc:
+{emotion_arc}
+
+Return JSON array only.
+""".strip()
+
+
+def canonicalize_storyboard_prompt(seed: dict, dce_plan: dict, storyboard: list) -> str:
+    return f"""
+Canonicalize this V21 storyboard for image generation.
+Replace vague references with explicit protagonist-centered visual details.
+Preserve input-image identity.
+Do not add ungrounded characters, props, or scene elements.
+Ensure each frame is one single coherent scene.
+
+Seed:
+{seed}
+
+DCEE plan:
+{dce_plan}
+
+Storyboard:
+{storyboard}
+
+Return the same JSON array.
+""".strip()
+
+
+def frame_prompt(frame: dict, dce_plan: dict, emotion_arc: dict, memory: dict, style: str, input_image_summary: dict | None) -> str:
+    return f"""
+{style}, full-color cinematic storybook illustration.
+V21 STORY-LOCKED SINGLE-SCENE RENDERING:
+- Generate one single coherent scene for this frame.
+- Do not create split-screen, comic panels, storyboard sheets, collage, diptych, or multiple moments in one image.
+- Show exactly one protagonist unless the input explicitly grounded another character.
+- Preserve the protagonist identity from the input image.
+- Preserve species, visible color, body shape, age impression, and distinctive traits.
+- Render only the exact story content specified below.
+- Do not add extra objects, props, animals, people, or scene elements that are not listed.
+
+Exact story sentence: {frame.get('story_sentence') or frame.get('caption')}
+Image-friendly sentence: {frame.get('image_sentence') or frame.get('story_sentence') or frame.get('caption')}
+Visible protagonist action: {frame.get('event')}
+Visible cause/evidence: {frame.get('event_grounding')}
+Allowed visual inventory only: {frame.get('must_show') or frame.get('key_objects')}
+Protagonist identity lock: {frame.get('character_reference_prompt')}
+Emotion: {frame.get('emotion')} intensity {frame.get('emotion_intensity')}/5; {frame.get('emotion_visual_rule')}
+World/background: {frame.get('scene_location')}, {frame.get('time_of_day')}, {frame.get('weather')}, {frame.get('atmosphere')}, {frame.get('environment_details')}
+Continuity memory: {memory}
+Input image summary: {input_image_summary}
+Quality: {QUALITY_SUFFIX}
+Negative: {NEGATIVE_PROMPT}
+""".strip()
