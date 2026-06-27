@@ -86,6 +86,13 @@ def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | 
     story_sentence = clean(story_row.get("image_sentence") or story_row.get("sentence"))
     story_sentence = story_sentence or clean(getattr(frame, "story_sentence", "")) or clean(getattr(frame, "caption", ""))
 
+    # Story Bible is attached to seed by pipeline_crossattn_butterfly.py.
+    # Keep a safe empty dict when it is not available, so the frame director remains usable.
+    story_bible = getattr(seed, "_story_bible", {}) or {}
+    if not isinstance(story_bible, dict):
+        story_bible = {}
+    bible_world = world_for_frame(story_bible, frame) if story_bible else {}
+
     protagonist = clean(getattr(seed, "protagonist", "")) or clean(getattr(frame, "protagonist", "")) or "protagonist"
 
     identity_parts = []
@@ -109,11 +116,12 @@ def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | 
         + as_list(story_row.get("object", ""))
         + as_list(getattr(frame, "key_objects", []))
         + as_list(getattr(frame, "evidence_objects", []))
-        + as_list(bible_world.get("stable_background", [])),
+        + as_list((bible_world or {}).get("stable_background", [])),
         10,
     )
 
     emotion = clean(story_row.get("emotion")) or clean(getattr(frame, "emotion", ""))
+    bible_emotion = emotion_cue_from_bible(story_bible, emotion) if story_bible else {}
     event = clean(story_row.get("action")) or clean(getattr(frame, "event", ""))
     event_grounding = clean(story_row.get("visible_cause") or story_row.get("action")) or clean(getattr(frame, "event_grounding", ""))
     visual_focus = clean(getattr(frame, "visual_focus", ""))
@@ -145,15 +153,15 @@ def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | 
         visible_cause=event_grounding or story_sentence,
         required_objects=required_objects,
         forbidden_objects=_forbidden_for_subject(protagonist),
-        location=bible_world.get("fixed_setting") or clean(story_row.get("location")) or clean(getattr(frame, "scene_location", "")) or clean(getattr(seed, "setting", "")),
-        weather=bible_world.get("weather") or clean(getattr(frame, "weather", "")),
-        atmosphere=bible_world.get("atmosphere") or clean(getattr(frame, "atmosphere", "")),
+        location=(bible_world or {}).get("fixed_setting") or clean(story_row.get("location")) or clean(getattr(frame, "scene_location", "")) or clean(getattr(seed, "setting", "")),
+        weather=(bible_world or {}).get("weather") or clean(getattr(frame, "weather", "")),
+        atmosphere=(bible_world or {}).get("atmosphere") or clean(getattr(frame, "atmosphere", "")),
         emotion=emotion,
         facial_expression=bible_emotion.get("face") or clean(story_row.get("facial_cue")) or clean(getattr(frame, "facial_cue", "")) or f"facial expression clearly showing {emotion}",
         body_pose=bible_emotion.get("body") or clean(story_row.get("body_cue")) or clean(getattr(frame, "body_cue", "")) or f"body pose clearly showing {emotion} while doing the action",
         camera=camera + (f"; visual focus: {visual_focus}" if visual_focus else ""),
         continuity=continuity,
-        negative=", ".join(unique(_forbidden_for_subject(protagonist) + as_list(story_bible.get("global_negative", [])), 50)),
+        negative=", ".join(unique(_forbidden_for_subject(protagonist) + as_list((story_bible or {}).get("global_negative", [])), 50)),
     )
 
 
