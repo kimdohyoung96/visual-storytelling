@@ -157,10 +157,10 @@ def _forbidden_for_subject(protagonist: str, seed: Any = None, frame: Any = None
         "text", "watermark", "logo",
         "split screen", "multi panel", "comic panel", "storyboard sheet", "collage", "diptych", "triptych",
         "duplicate protagonist", "second protagonist", "two protagonists", "multiple protagonists",
-        "two bears", "multiple bears", "extra bear", "baby bear", "bear cub", "small bear",
+        "two bears", "multiple bears", "extra bear", "baby bear", "bear cub", "small bear", "tiny bear", "second white bear", "mirrored bear", "bear reflection as second subject",
         "extra character", "extra animal", "unrelated extra people", "unrelated humans",
         "wrong age", "wrong gender", "child version", "baby version", "juvenile version",
-        "wrong species", "wrong fur color", "wrong coat color", "different identity",
+        "wrong species", "wrong fur color", "wrong coat color", "different identity", "standing portrait without event", "character looking at camera only",
         "generic portrait only", "empty background", "missing action", "missing event", "missing required object",
         "unrelated object", "unrelated prop", "human protagonist", "human face",
     ]
@@ -290,16 +290,18 @@ def prompt_from_spec(spec: FrameVisualSpec, mode: str = "event_locked") -> str:
         f"allowed visual inventory only: {obj}. "
         f"location: {loc}; weather: {weather}; atmosphere: {atmosphere}. "
         f"emotion: {spec.emotion}; face: {face}; body pose: {body}. camera: {camera}. "
+        f"visible DCEE checklist: protagonist + current action + cause/evidence + required objects + background + emotion. "
+        f"never show forbidden items: {', '.join(unique(spec.forbidden_objects, 12))}. "
     )
 
     if mode == "event_locked":
-        extra = "Prioritize the main action and visible event above background beauty."
+        extra = "Prioritize the main action and visible event above background beauty. The action must be readable at first glance."
     elif mode == "evidence_locked":
-        extra = "Make the causal evidence and required objects visible, with no unrelated objects."
+        extra = "Make the causal evidence and required objects large enough to see, with no unrelated objects."
     elif mode == "emotion_causal_locked":
         extra = f"The viewer must understand why the protagonist feels {spec.emotion} from the action and scene."
     elif mode == "continuity_locked":
-        extra = "Keep the same subject identity and world continuity, but change pose to match the current event."
+        extra = "Keep the same subject identity and world continuity, but change pose to match the current event; do not copy earlier wrong layouts."
     else:
         extra = "Use a clean composition that shows the protagonist, action, evidence, and background in one frame."
     return clean(base + " " + extra)

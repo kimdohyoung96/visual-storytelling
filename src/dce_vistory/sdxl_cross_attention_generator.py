@@ -24,7 +24,7 @@ def _load_rgb_image(path: str, size=(1024, 1024)):
     return img
 
 def _combine_reference_images(paths: List[str], size=(1024, 1024)):
-    """V22: avoid reference collages by default because collages can create duplicate protagonists.
+    """V24: avoid reference collages by default because collages can create duplicate protagonists.
     Use only the primary input subject image as IP-Adapter identity reference.
     Previous frame continuity is injected as text in the prompt, not as an image collage.
     """
@@ -158,7 +158,7 @@ class SDXLButterflyCrossAttentionGenerator:
         refs = getattr(packet, "reference_images", {}) or {}
         meta = getattr(packet, "control_metadata", {}) or {}
         paths = []
-        # V22: identity anchor should be the input image first. Do not create a collage of prior generated frames.
+        # V24: identity anchor should be the input image first. Do not create a collage of prior generated frames.
         if refs.get("subject"):
             paths.append(refs.get("subject"))
         elif meta.get("source_reference_image_path"):
@@ -241,7 +241,7 @@ class SDXLButterflyCrossAttentionGenerator:
                     notes={
                         "seed": sd,
                         "prompt_variant_mode": mode,
-                        "sentence_locked_generation": True,
+                        "dcee_event_locked_generation": True,
                         "untrained_butterfly_adapter_disabled": not self.use_butterfly_adapter,
                         "reference_image_path": reference_path,
                         "ip_adapter_loaded": self.ip_adapter_loaded,

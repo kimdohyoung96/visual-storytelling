@@ -9,7 +9,7 @@ Never import characters, occupations, props, or scenes from unrelated example st
 If JSON is requested, return concise valid JSON only.
 Core structure: Desire -> Conflict -> Event Chain -> Ending Emotion (DCEE).
 
-V23 POLICY:
+V24 POLICY:
 - The input image is a hard identity anchor. The protagonist's species, fur/skin/clothing color, age impression, body shape, and distinctive appearance must be preserved.
 - If the input subject is a white bear, keep a white bear in story and image generation; never drift to a brown bear or a different species.
 - The story must stay protagonist-centered and visually drawable.
@@ -214,6 +214,7 @@ DCEE plan: {dce_plan}
 """.strip()
 
 
+
 def next_story_sentence_prompt(seed: dict, dce_plan: dict, emotion_arc: dict, story_so_far: list, previous_frame: dict | None, frame_index: int, num_frames: int, forbidden_entities: List[str], protagonist_only: bool = True) -> str:
     target_emotion = ""
     intens = ""
@@ -226,44 +227,79 @@ def next_story_sentence_prompt(seed: dict, dce_plan: dict, emotion_arc: dict, st
             intens = intensities[frame_index]
 
     return f"""
-Generate ONLY the next protagonist-centered story sentence for frame {frame_index+1} of {num_frames}.
-The sentence must be EASY TO DRAW and must focus on the protagonist.
+Generate ONLY the next DCEE event step for frame {frame_index+1} of {num_frames}.
+
+You must output two layers:
+1) sentence: Korean natural story sentence for the paper/demo.
+2) image_sentence_en and visual fields: English, concrete, SDXL-friendly rendering instruction.
 
 Grounding rules:
-- Use only grounded entities from the seed, story_so_far, and previous_frame.
+- Use only grounded entities from seed, DCEE plan, story_so_far, and previous_frame.
 - Forbidden ungrounded entities: {forbidden_entities}
 - protagonist_only = {protagonist_only}
-- Do not create any new character, friend, animal friend, helper, enemy, human, woodcutter, fairy, crowd, or duplicate protagonist.
+- The protagonist must be the only active subject.
+- Do not create friends, animal friends, helpers, enemies, humans, woodcutters, fairies, crowds, or duplicate protagonist.
 - Preserve protagonist identity from the input image and seed character profile.
-- If the protagonist is a white bear in the input, keep a white bear.
-- The protagonist must remain the subject of every sentence.
-- The sentence must naturally continue story_so_far.
+- If protagonist is a white bear, keep exactly one white bear.
+- Do not use reflection/mirror/shadow as a second character. If reflection is needed, describe ripples or water surface only.
+
+DCEE event requirement:
+- This frame must advance the DCEE chain.
+- It must have a visible event, not just a nice portrait.
+- Event must show a state change: before -> visible action -> after/evidence.
+- The action must be visually readable from a single image.
+- Avoid abstract frames such as "realizes", "understands", "looks at nothing", "empty place" unless converted into visible evidence.
 
 Visual simplicity rules:
-- One sentence = one single drawable scene.
-- Use one main action only.
-- Use a small number of visible objects.
-- Use a concrete place, weather, and emotion that an image model can show clearly.
-- Avoid abstract, multi-clause, or hard-to-illustrate events.
+- One frame = one single coherent scene.
+- One main action only.
+- Keep object inventory small and concrete.
+- The image prompt fields must be English.
+- No split-screen, no comic panel, no multi-moment layout.
 
 Allowed visual elements:
-- protagonist
-- protagonist's simple props from input/seed
-- grounded background objects such as forest, river, bamboo, rock, leaf, rain, path, hill, shadow, sunlight
+- exactly one protagonist
+- protagonist's grounded props from input/seed/DCEE plan
+- grounded background objects such as forest, riverbank, river, snow, bamboo, rock, leaf, rain, path, hill, shadow, sunlight
+- visible traces/evidence of the current event such as fallen jar, spilled honey, ripples, footprints, broken twig
 
-Desired output JSON keys:
-sentence, subject, action, object, location, weather, atmosphere, emotion, emotion_intensity,
-visible_cause, required_objects, background_elements, supporting_cast, continuity_notes, action_pose, camera_composition, absent_objects.
+Return valid JSON with keys:
+sentence,
+image_sentence_en,
+subject,
+action,
+action_en,
+action_pose_en,
+object,
+location,
+location_en,
+weather,
+atmosphere,
+emotion,
+emotion_intensity,
+visible_cause,
+visible_cause_en,
+state_before,
+state_after,
+required_objects,
+required_objects_en,
+background_elements,
+background_elements_en,
+supporting_cast,
+continuity_notes,
+camera_composition_en,
+absent_objects,
+forbidden_visuals.
 
 Strict output rules:
 - subject must be the protagonist only.
 - supporting_cast must be [].
-- sentence should be short and visually concrete.
-- action_pose must describe the protagonist's body pose needed for this event.
-- camera_composition must describe how to frame this single scene.
-- absent_objects must list story objects that should NOT appear in this frame because they were lost, gone, or not relevant.
-- required_objects must list only concrete visible objects needed in the image.
-- background_elements must list location/background details actually visible in the scene.
+- required_objects_en must contain only concrete visible objects, maximum 5.
+- background_elements_en must contain concrete background elements, maximum 4.
+- absent_objects must list objects that should NOT appear in this frame.
+- forbidden_visuals must include duplicate protagonist, second bear, extra character, split panel.
+- image_sentence_en must be one clear English sentence that directly describes the image to generate.
+- action_pose_en must describe the protagonist's pose/action clearly.
 - target emotion for this frame: {target_emotion}
 - target emotion intensity: {intens}
 

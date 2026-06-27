@@ -177,9 +177,9 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             )
 
         packet.positive_prompt += (
-            "\n\nV23 CONSISTORY-LITE STORY-IMAGE GROUNDING RULES:"
+            "\n\nV24 DCEE EVENT-FRAME GROUNDING RULES:"
             f"\n- Render ONE single coherent scene only; never use split panels or multiple moments."
-            f"\n- ConsiStory-lite subject anchor: share only protagonist identity across frames; do not share background mistakes."\
+            f"\n- ConsiStory-lite subject anchor: preserve only protagonist identity across frames; do not copy background/layout mistakes."\
             f"\n- Render the SAME protagonist identity: {identity_pos}"
             f"\n- Use the input image as a hard reference anchor. If the subject is {protagonist_short}, keep {protagonist_short} in this frame."
             f"\n- Exact story sentence to render: {getattr(frame, 'story_sentence', '')}"
@@ -249,8 +249,8 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         generation_policy = {
-            "version": "V23",
-            "mode": "consistory_lite_event_grounded_candidate_selection",
+            "version": "V24",
+            "mode": "dcee_event_frame_grounded_pairwise_selector",
             "protagonist_only": True,
             "single_scene_per_frame": True,
             "multiple_candidates_for_selection": True,
@@ -258,15 +258,18 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "story_sentence_locked": True,
             "previous_selected_frame_used_for_text_continuity": True,
             "consistory_lite_subject_anchor": True,
+            "dcee_event_contract_per_frame": True,
+            "english_sdxl_visual_prompt": True,
+            "pairwise_vlm_candidate_selection": True,
             "vlm_story_event_candidate_selector": True,
             "previous_generated_images_not_used_as_ip_reference_by_default": True,
             "allowed_visual_elements": [
                 "protagonist", "protagonist props", "grounded background objects", "weather", "lighting", "emotion cues"
             ],
             "blocked_story_entities": getattr(seed, "forbidden_ungrounded_entities", []),
-            "reason": "V23 uses ConsiStory-inspired subject-only anchors, stronger event-grounded prompts, and VLM-based candidate selection so story/action/evidence dominate image quality."
+            "reason": "V24 keeps ConsiStory-inspired subject-only identity anchoring but removes unstable attention-style assumptions. It adds DCEE event contracts, English SDXL visual prompts, strict single-subject prompts, and pairwise VLM candidate selection."
         }
-        _write_json(out_dir / "generation_policy_V23.json", generation_policy)
+        _write_json(out_dir / "generation_policy_V24.json", generation_policy)
         total_frames = int(sample.get("num_frames", 6))
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, total_frames)
 
@@ -413,7 +416,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "storyboard": str(out_dir / "storyboard.json"),
             "full_story": str(out_dir / "full_story.json"),
             "dcee_plan": str(out_dir / "dcee_plan.json"),
-            "generation_policy_V23": str(out_dir / "generation_policy_V23.json"),
+            "generation_policy_V23": str(out_dir / "generation_policy_V24.json"),
             "has_contact_sheet": (out_dir / "contact_sheet.png").exists(),
             "num_selected_images": len(selected_images),
         })

@@ -109,7 +109,7 @@ def _make_contact_sheet_local(image_paths: List[str], out_path: Path, cols: int 
     header_h = 54
     canvas = Image.new("RGB", (cols * thumb_size[0], rows * thumb_size[1] + header_h), "white")
     draw = ImageDraw.Draw(canvas)
-    draw.text((12, 12), "DCEE-CausalVerse V23 Contact Sheet", fill=(0, 0, 0))
+    draw.text((12, 12), "DCEE-CausalVerse V24 Contact Sheet", fill=(0, 0, 0))
     for idx, p in enumerate(valid):
         img = Image.open(p).convert("RGB")
         img.thumbnail((thumb_size[0] - 20, thumb_size[1] - 44))
@@ -275,23 +275,78 @@ Scoring rules:
         except Exception as e:
             return {"vlm_error": str(e)[:300]}
 
+    def _vlm_pairwise_select(self, frame, candidates, is_ending: bool = False) -> Dict[str, Any]:
+        """Ask the VLM to compare all candidates together. This fixes cases where per-image scores are too close."""
+        if not self.use_vlm or len(candidates) <= 1:
+            return {}
+        image_paths = [getattr(c, "image_path", "") for c in candidates]
+        cand_ids = [int(getattr(c, "candidate_id", i)) for i, c in enumerate(candidates)]
+        prompt = f"""
+You are selecting the best image for one visual storytelling frame.
+Compare all candidate images together and choose the image that best matches the story frame.
+
+Frame story sentence: {getattr(frame, 'story_sentence', '')}
+Image-friendly sentence: {getattr(frame, 'image_sentence', '')}
+Required event/action: {getattr(frame, 'event', '')}
+Required evidence/cause: {getattr(frame, 'event_grounding', '')}
+Required visual inventory: {getattr(frame, 'must_show', []) or getattr(frame, 'evidence_objects', [])}
+Target emotion: {getattr(frame, 'emotion', '')}
+Location/weather/background: {getattr(frame, 'scene_location', '')}, {getattr(frame, 'weather', '')}, {getattr(frame, 'environment_details', [])}
+Protagonist identity: {getattr(frame, 'character_reference_prompt', '') or getattr(frame, 'character_identity', '')}
+Candidate IDs in image order: {cand_ids}
+
+Selection rule:
+1. Reject any candidate with duplicate protagonist, two bears, extra character, split panel, or multi-scene.
+2. Among valid candidates, choose the candidate where the required event/action is most visible.
+3. Then choose the candidate with best required object/evidence visibility.
+4. Then choose the candidate with best emotion and emotion-cause visibility.
+5. Image prettiness is the last priority.
+
+Return JSON only:
+{{
+  "best_candidate_id": <int>,
+  "rejected_candidate_ids": [<int>],
+  "candidate_judgments": {{
+    "<candidate_id>": {{
+      "story_alignment": 0.0,
+      "event_alignment": 0.0,
+      "evidence_visibility": 0.0,
+      "emotion_visibility": 0.0,
+      "identity_consistency": 0.0,
+      "single_scene_score": 0.0,
+      "duplicate_protagonist": false,
+      "extra_character": false,
+      "split_panel": false,
+      "action_visible": true,
+      "reason": "..."
+    }}
+  }},
+  "reason": "..."
+}}
+""".strip()
+        try:
+            data = extract_json(self.vlm.generate_with_images(SYSTEM_VLM, prompt, image_paths, temperature=0.0, max_tokens=1200))
+            return data if isinstance(data, dict) else {}
+        except Exception as e:
+            return {"vlm_pairwise_error": str(e)[:400]}
+
     def rank_frame_candidates(self, frame, dce_plan, candidates, is_ending: bool = False):
         ranked = []
         for c in candidates:
             scores = {
                 "image_quality": image_quality_proxy(c.image_path),
                 "colorfulness": colorfulness_score(c.image_path),
-                "identity_consistency": 0.50,
-                "story_alignment": 0.45,
-                "event_alignment": 0.45,
-                "event_grounding": 0.45,
-                "evidence_visibility": 0.45,
-                "emotion_visibility": 0.45,
-                "emotion_cause_visibility": 0.45,
-                "scene_alignment": 0.45,
-                "continuity": 0.50,
-                "qa_score": 0.45,
-                "single_scene_score": 0.60,
+                "identity_consistency": 0.45,
+                "story_alignment": 0.40,
+                "event_alignment": 0.40,
+                "event_grounding": 0.40,
+                "evidence_visibility": 0.40,
+                "emotion_visibility": 0.40,
+                "emotion_cause_visibility": 0.40,
+                "scene_alignment": 0.40,
+                "continuity": 0.45,
+                "qa_score": 0.40,
+                "single_scene_score": 0.55,
                 "duplicate_penalty": 0.0,
                 "action_missing_penalty": 0.0,
                 "variant_priority": _variant_priority(c, is_ending=is_ending),
@@ -303,7 +358,6 @@ Scoring rules:
                 c.notes.update({k: v for k, v in local_scores.items() if "error" in k or k == "local_caption"})
                 cap = local_scores.get("local_caption", "")
                 scores["duplicate_penalty"] = max(scores["duplicate_penalty"], _caption_bad_signals(cap))
-                # Do not let local caption override VLM later; it is only a weak fallback.
                 scores["story_alignment"] = max(scores["story_alignment"], _clamp01(local_scores.get("story_alignment_local", 0.0)))
                 scores["event_alignment"] = max(scores["event_alignment"], _clamp01(local_scores.get("event_alignment_local", 0.0)))
                 scores["event_grounding"] = max(scores["event_grounding"], _clamp01(local_scores.get("event_alignment_local", 0.0)))
@@ -313,7 +367,6 @@ Scoring rules:
 
             vlm_scores = self._vlm_frame_eval(frame, c)
             if vlm_scores and "vlm_error" not in vlm_scores:
-                # V23: use VLM values directly rather than maxing with optimistic defaults.
                 for key in [
                     "story_alignment", "event_alignment", "event_grounding", "evidence_visibility",
                     "emotion_visibility", "emotion_cause_visibility", "scene_alignment", "continuity",
@@ -328,51 +381,50 @@ Scoring rules:
                 action_visible = bool(vlm_scores.get("action_visible", False))
 
                 if duplicate:
-                    scores["duplicate_penalty"] = max(scores["duplicate_penalty"], 0.85)
-                    scores["identity_consistency"] = min(scores["identity_consistency"], 0.25)
+                    scores["duplicate_penalty"] = max(scores["duplicate_penalty"], 0.90)
+                    scores["identity_consistency"] = min(scores["identity_consistency"], 0.20)
                 if split:
-                    scores["duplicate_penalty"] = max(scores["duplicate_penalty"], 0.55)
+                    scores["duplicate_penalty"] = max(scores["duplicate_penalty"], 0.60)
                     scores["single_scene_score"] = min(scores["single_scene_score"], 0.2)
                 if not exactly_one:
-                    scores["duplicate_penalty"] = max(scores["duplicate_penalty"], 0.35)
+                    scores["duplicate_penalty"] = max(scores["duplicate_penalty"], 0.40)
                 if not action_visible:
-                    scores["action_missing_penalty"] = max(scores["action_missing_penalty"], 0.30)
+                    scores["action_missing_penalty"] = max(scores["action_missing_penalty"], 0.35)
                     scores["event_alignment"] = min(scores["event_alignment"], 0.35)
 
-                c.notes["v23_vlm_judgment"] = vlm_scores
+                c.notes["v24_vlm_judgment"] = vlm_scores
                 c.notes["vlm_reason"] = vlm_scores.get("reason", "")
             elif vlm_scores and "vlm_error" in vlm_scores:
                 c.notes["vlm_error"] = vlm_scores["vlm_error"]
 
-            # V23: event and evidence correctness dominate. A beautiful but wrong image must lose.
             overall = (
-                0.020 * scores["image_quality"]
+                0.010 * scores["image_quality"]
                 + 0.005 * scores["colorfulness"]
                 + 0.170 * scores["identity_consistency"]
-                + 0.210 * scores["story_alignment"]
-                + 0.190 * scores["event_alignment"]
-                + 0.135 * scores["event_grounding"]
-                + 0.125 * scores["evidence_visibility"]
-                + 0.075 * scores["emotion_visibility"]
-                + 0.050 * scores["emotion_cause_visibility"]
-                + 0.045 * scores["scene_alignment"]
-                + 0.045 * scores["continuity"]
+                + 0.220 * scores["story_alignment"]
+                + 0.215 * scores["event_alignment"]
+                + 0.145 * scores["event_grounding"]
+                + 0.130 * scores["evidence_visibility"]
+                + 0.070 * scores["emotion_visibility"]
+                + 0.055 * scores["emotion_cause_visibility"]
+                + 0.035 * scores["scene_alignment"]
+                + 0.040 * scores["continuity"]
                 + 0.055 * scores["single_scene_score"]
-                + 0.035 * scores["qa_score"]
+                + 0.025 * scores["qa_score"]
                 + scores["variant_priority"]
                 - scores["duplicate_penalty"]
                 - scores["action_missing_penalty"]
                 - scores["static_penalty"]
             )
             if is_ending:
-                overall += 0.060 * scores["emotion_visibility"] + 0.040 * scores["emotion_cause_visibility"] + 0.025 * scores["continuity"]
+                overall += 0.070 * scores["emotion_visibility"] + 0.055 * scores["emotion_cause_visibility"] + 0.025 * scores["continuity"]
 
             scores["overall"] = round(float(overall), 4)
             c.scores.update(scores)
-            c.notes["v23_selection_reason"] = {
+            c.notes["v24_selection_reason"] = {
                 "story_first_selection": True,
-                "vlm_values_replace_defaults": True,
-                "image_quality_weight_tiny": True,
+                "event_action_evidence_first": True,
+                "image_quality_weight_minimal": True,
                 "variant_priority": scores["variant_priority"],
                 "duplicate_penalty": scores["duplicate_penalty"],
                 "action_missing_penalty": scores["action_missing_penalty"],
@@ -381,7 +433,47 @@ Scoring rules:
             }
             ranked.append(c)
 
-        return sorted(ranked, key=lambda x: x.scores.get("overall", 0.0), reverse=True)
+        ranked = sorted(ranked, key=lambda x: x.scores.get("overall", 0.0), reverse=True)
+
+        # V24: final pairwise VLM selector, if available, can override close/incorrect scoring.
+        pairwise = self._vlm_pairwise_select(frame, ranked, is_ending=is_ending)
+        if pairwise and "vlm_pairwise_error" not in pairwise:
+            try:
+                best_id = int(pairwise.get("best_candidate_id"))
+                rejected = {int(x) for x in pairwise.get("rejected_candidate_ids", [])}
+                judgments = pairwise.get("candidate_judgments", {}) or {}
+                for c in ranked:
+                    cid = int(getattr(c, "candidate_id", -1))
+                    c.notes["v24_pairwise_selection"] = pairwise
+                    j = judgments.get(str(cid), judgments.get(cid, {})) if isinstance(judgments, dict) else {}
+                    if isinstance(j, dict):
+                        for key in [
+                            "story_alignment", "event_alignment", "evidence_visibility", "emotion_visibility",
+                            "identity_consistency", "single_scene_score"
+                        ]:
+                            if key in j:
+                                c.scores[key] = _clamp01(j[key], c.scores.get(key, 0.0))
+                        if bool(j.get("duplicate_protagonist", False)) or bool(j.get("extra_character", False)):
+                            c.scores["duplicate_penalty"] = max(c.scores.get("duplicate_penalty", 0.0), 0.90)
+                        if bool(j.get("split_panel", False)):
+                            c.scores["duplicate_penalty"] = max(c.scores.get("duplicate_penalty", 0.0), 0.60)
+                        if not bool(j.get("action_visible", True)):
+                            c.scores["action_missing_penalty"] = max(c.scores.get("action_missing_penalty", 0.0), 0.35)
+                    if cid == best_id:
+                        c.scores["overall"] = c.scores.get("overall", 0.0) + 1.0
+                        c.notes["v24_pairwise_chosen"] = True
+                    if cid in rejected:
+                        c.scores["overall"] = c.scores.get("overall", 0.0) - 1.0
+                        c.notes["v24_pairwise_rejected"] = True
+                ranked = sorted(ranked, key=lambda x: x.scores.get("overall", 0.0), reverse=True)
+            except Exception as e:
+                for c in ranked:
+                    c.notes["v24_pairwise_parse_error"] = str(e)[:300]
+        elif pairwise and "vlm_pairwise_error" in pairwise:
+            for c in ranked:
+                c.notes["v24_pairwise_error"] = pairwise["vlm_pairwise_error"]
+
+        return ranked
 
     def rerank_ending_candidates(self, final_frame, dce_plan, candidates):
         return self.rank_frame_candidates(final_frame, dce_plan, candidates, is_ending=True)
