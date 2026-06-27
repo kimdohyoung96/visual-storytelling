@@ -4,26 +4,34 @@ from typing import Any, Dict, List
 
 SYSTEM_NARRATIVE = """
 You are a research-grade visual storytelling planner.
-All stories must be grounded only in the given text, image summary, protagonist specification, and provided simple input metadata.
+All stories must be grounded only in the given text, image summary, protagonist specification, and simple input metadata.
 Never import characters, occupations, props, or scenes from unrelated example stories.
 If JSON is requested, return concise valid JSON only.
 Core structure: Desire -> Conflict -> Event Chain -> Ending Emotion (DCEE).
+
+V19 POLICY:
+- Protagonist-only visual storytelling is the default.
+- The story must center on the protagonist only.
+- Do not create secondary characters, animal friends, villagers, humans, helpers, enemies, woodcutters, fairies, or crowds unless the user explicitly provides them in input.
+- Background objects and simple props are allowed, but they must serve the protagonist's action.
+- If an object is difficult to render or would confuse the input-image identity, remove it from the story rather than making it a new character.
 """.strip()
 
 SYSTEM_VLM = """
 You are a strict visual narrative evaluator. Return concise valid JSON only.
-Evaluate whether an image shows the planned event, required objects, emotion, world state, and protagonist identity.
+Evaluate whether an image shows the protagonist, planned event, required props, emotion, world state, and identity consistency.
 """.strip()
 
 QUALITY_SUFFIX = (
     "full-color cinematic storybook illustration, rich natural colors, emotionally meaningful color palette, "
-    "clear action, clear visual evidence, expressive face, expressive body language, detailed background, "
+    "clear protagonist action, clear prop evidence, expressive face, expressive body language, detailed background, "
     "coherent anatomy, cinematic lighting, sharp focus, professional illustration quality"
 )
 
 NEGATIVE_PROMPT = (
     "monochrome, black and white, grayscale, pencil sketch, line art only, colorless image, "
-    "missing action, missing required object, missing visual evidence, emotionless face, weak expression, stiff pose, portrait only, "
+    "extra character, secondary character, crowd, unrelated animal, unrelated human, duplicated protagonist, "
+    "missing protagonist, missing action, missing required prop, missing visual evidence, emotionless face, weak expression, stiff pose, portrait only, "
     "empty background, low quality, blurry, bad anatomy, distorted face, watermark, text"
 )
 
@@ -83,21 +91,21 @@ def choose_camera_distance(shot_type: str) -> str:
 
 def image_understanding_prompt(image_path: str, sample: dict) -> str:
     return f"""
-Describe the input image for grounded DCEE visual storytelling.
-Return JSON with: caption, characters, setting, objects, mood, inferred_plot_hint, time_of_day, weather, environment_details.
+Describe the input image for grounded V19 protagonist-only DCEE visual storytelling.
+Return JSON with: caption, characters, protagonist_description, setting, objects, background_objects, mood, inferred_plot_hint, time_of_day, weather, environment_details.
 Image path: {image_path}
 Text prompt: {sample.get('text_prompt')}
 Protagonist: {sample.get('protagonist')}
 Target ending emotion: {sample.get('target_ending_emotion')}
 Only describe what is actually present or safely inferable.
+Do not invent secondary characters.
 """.strip()
 
 
-def story_seed_prompt(sample: dict, image_summary: dict | None, forbidden_entities: List[str]) -> str:
+def story_seed_prompt(sample: dict, image_summary: dict | None, forbidden_entities: List[str], protagonist_only: bool = True) -> str:
     return f"""
-Create a GROUNDED story seed for visual storytelling.
+Create a GROUNDED V19 story seed for protagonist-only visual storytelling.
 Use only the user input text, image summary, protagonist specification, and simple metadata.
-Do not import unrelated template stories or hidden prior examples.
 
 Input sample:
 {sample}
@@ -108,32 +116,61 @@ Image summary:
 Forbidden entities unless explicitly grounded in the input/image summary:
 {forbidden_entities}
 
+V19 protagonist-only policy:
+- protagonist_only = {protagonist_only}
+- The story must center on the protagonist only.
+- Do not invent friends, wild animal friends, helpers, enemies, humans, woodcutters, fairies, villagers, crowds, or other agents.
+- Keep only simple props and background objects needed for the protagonist's action.
+- If the input contains only one protagonist image, do not create additional character agents.
+
 Return JSON with keys:
 setting, objects, characters, mood, visual_symbols, world_context, character_profiles.
 
 Requirements:
+- characters must contain only the protagonist unless the input explicitly names another character.
+- objects must be props/background, not new characters.
 - protagonist identity must stay stable across all frames.
-- objects and characters must be concrete, drawable, and grounded.
-- if the protagonist is a panda, do not invent a woodcutter.
+- if the protagonist is a panda, do not invent a woodcutter, animal friends, or other pandas.
 - character_profiles must include: name, role, age_group, gender, face, hair, body, outfit, signature_items, color_palette, identity_anchor_prompt.
 """.strip()
 
 
-def story_abstract_prompt(seed: dict, forbidden_entities: List[str]) -> str:
+def story_abstract_prompt(seed: dict, forbidden_entities: List[str], protagonist_only: bool = True) -> str:
     return f"""
-Write one grounded abstract paragraph for a visual story.
+Write one grounded abstract paragraph for a V19 protagonist-only visual story.
 The story must follow Desire -> Conflict -> Event Chain -> Ending Emotion.
 Use only grounded entities from the seed.
-Forbidden ungrounded entities: {forbidden_entities}
-Seed: {seed}
+
+Forbidden ungrounded entities:
+{forbidden_entities}
+
+V19 policy:
+- protagonist_only = {protagonist_only}
+- The protagonist is the only active character.
+- Conflict must come from environment, lost object, obstacle, weather, distance, hunger, mistake, or internal emotion.
+- Do not create friends, wild animal friends, helpers, enemies, humans, woodcutters, fairies, crowds, or other agents.
+- Props/background objects are allowed only if they support the protagonist's visible action.
+
+Seed:
+{seed}
+
 Return plain text only.
 """.strip()
 
 
-def dcee_plan_prompt(seed: dict, abstract: str, forbidden_entities: List[str]) -> str:
+def dcee_plan_prompt(seed: dict, abstract: str, forbidden_entities: List[str], protagonist_only: bool = True) -> str:
     return f"""
-Create one grounded DCEE plan from the seed and abstract.
-Forbidden ungrounded entities: {forbidden_entities}
+Create one grounded V19 DCEE plan from the seed and abstract.
+
+Forbidden ungrounded entities:
+{forbidden_entities}
+
+V19 protagonist-only policy:
+- protagonist_only = {protagonist_only}
+- The protagonist is the only active character.
+- Do not introduce secondary characters or other agents.
+- Conflict must be protagonist-centered: environment obstacle, lost prop, hunger, weather, distance, injury, fear, or internal dilemma.
+- Do not introduce woodcutter, axe, fairy, animal friends, wild animal friends, villagers, helpers, or enemies unless explicitly grounded in input.
 
 Return JSON with keys:
 protagonist, desire, fear, misbelief, obstacle, conflict, event_chain, event_spine, turning_point,
@@ -141,27 +178,31 @@ target_ending_emotion, ending_state, moral_or_theme, planning_structure.
 
 Requirements:
 - events must be concrete and visually drawable.
-- do not introduce ungrounded occupations, characters, or props.
-- do not introduce woodcutter, axe, fairy, river unless grounded in the input.
-- event_chain must contain short concrete event objects. Each event item may be a string or object.
+- each event must show what the protagonist does, sees, loses, finds, carries, reaches, drops, searches, sits near, or walks away from.
+- event_chain must not depend on another character's action.
+- event_chain must contain short concrete event objects.
 
-Seed: {seed}
-Abstract: {abstract}
+Seed:
+{seed}
+
+Abstract:
+{abstract}
 """.strip()
 
 
 def emotion_arc_prompt(seed: dict, abstract: str, dce_plan: dict, num_frames: int) -> str:
     return f"""
-Create an emotion arc with exactly {num_frames} states for the selected DCEE plan.
+Create an emotion arc with exactly {num_frames} states for the selected V19 protagonist-only DCEE plan.
 Return JSON with keys: states, intensities, rationale.
 The last emotion must match the target ending emotion or a direct synonym.
+All emotions must be visually expressible by the protagonist's face, body, pose, lighting, color, and background.
 Seed: {seed}
 Abstract: {abstract}
 DCEE plan: {dce_plan}
 """.strip()
 
 
-def next_story_sentence_prompt(seed: dict, dce_plan: dict, emotion_arc: dict, story_so_far: list, previous_frame: dict | None, frame_index: int, num_frames: int, forbidden_entities: List[str]) -> str:
+def next_story_sentence_prompt(seed: dict, dce_plan: dict, emotion_arc: dict, story_so_far: list, previous_frame: dict | None, frame_index: int, num_frames: int, forbidden_entities: List[str], protagonist_only: bool = True) -> str:
     target_emotion = ""
     intens = ""
     if isinstance(emotion_arc, dict):
@@ -171,36 +212,50 @@ def next_story_sentence_prompt(seed: dict, dce_plan: dict, emotion_arc: dict, st
             target_emotion = states[frame_index]
         if frame_index < len(intensities):
             intens = intensities[frame_index]
+
     return f"""
-Generate ONLY the next story sentence for frame {frame_index+1} of {num_frames}.
-The sentence must be EASY TO DRAW.
-Use one clear action, one clear place, visible objects, and a readable emotion.
+Generate ONLY the next protagonist-centered story sentence for frame {frame_index+1} of {num_frames}.
+The sentence must be EASY TO DRAW and must focus on the protagonist.
 
 Grounding rules:
 - Use only grounded entities from the seed and previous story.
 - Forbidden ungrounded entities: {forbidden_entities}
-- Do not import hidden examples such as a woodcutter story.
-- If the protagonist is a panda, keep the panda as the protagonist.
-- The sentence must naturally continue the story-so-far.
+- protagonist_only = {protagonist_only}
+- Do not create any new character, friend, animal friend, helper, enemy, human, woodcutter, fairy, crowd, or duplicate protagonist.
+- If the image model cannot reliably render another object/agent, do not add that object/agent to the story.
+- The protagonist must remain the subject of every sentence.
+- The sentence must naturally continue story_so_far.
+
+Allowed visual elements:
+- protagonist
+- protagonist's simple props from input/seed
+- background objects such as forest, river, bamboo, rock, leaf, rain, path, hill, shadow, sunlight
 
 Desired output JSON keys:
 sentence, subject, action, object, location, weather, atmosphere, emotion, emotion_intensity,
 visible_cause, required_objects, background_elements, supporting_cast, continuity_notes.
 
-Requirements:
-- sentence must be a single image-friendly sentence.
-- exactly one primary visible action.
-- specify visible cause of the emotion.
-- required_objects must be concrete drawable items.
-- background_elements must help the scene (forest, stream, bamboo, hill, etc. only if grounded).
-- keep continuity with previous frame.
+Strict output rules:
+- subject must be the protagonist only.
+- supporting_cast must be [].
+- sentence must contain exactly one primary visible action by the protagonist.
+- sentence must include one concrete place/background.
+- sentence must include visible emotion cue through face/body/background.
+- required_objects must contain only props/background, not characters.
 - frame emotion target: {target_emotion}
 - frame emotion intensity target: {intens}
 
-Seed: {seed}
-DCEE plan: {dce_plan}
-Story so far: {story_so_far}
-Previous frame summary: {previous_frame}
+Seed:
+{seed}
+
+DCEE plan:
+{dce_plan}
+
+Story so far:
+{story_so_far}
+
+Previous frame summary:
+{previous_frame}
 """.strip()
 
 
@@ -213,7 +268,7 @@ def dcee_branch_plan_prompt(seed: dict, abstract: str, num_candidates: int = 4) 
 
 def dcee_candidate_selection_prompt(seed: dict, abstract: str, candidates: list) -> str:
     return f"""
-Select the best DCEE candidate for grounded visual storytelling.
+Select the best DCEE candidate for grounded protagonist-only visual storytelling.
 Return JSON with selected_candidate_id, scores, reason.
 Seed: {seed}
 Abstract: {abstract}
@@ -235,9 +290,9 @@ def emotion_delta_text(prev_emotion: str | None, cur_emotion: str, intensity: in
 
 def storyboard_prompt(seed: dict, abstract: str, dce_plan: dict, emotion_arc: dict, num_frames: int) -> str:
     return f"""
-Create a {num_frames}-frame grounded storyboard.
-Each frame must include concrete event, visible evidence, emotion, location, and required objects.
-Do not introduce ungrounded template-story entities.
+Create a {num_frames}-frame grounded protagonist-only storyboard.
+Each frame must include concrete protagonist event, visible evidence, emotion, location, and required props/background.
+Do not introduce secondary characters or ungrounded template-story entities.
 Seed: {seed}
 Abstract: {abstract}
 DCEE plan: {dce_plan}
@@ -248,8 +303,8 @@ Return JSON array only.
 
 def canonicalize_storyboard_prompt(seed: dict, dce_plan: dict, storyboard: list) -> str:
     return f"""
-Canonicalize this storyboard for image generation.
-Replace vague references with explicit grounded entities.
+Canonicalize this storyboard for protagonist-only image generation.
+Replace vague references with explicit grounded protagonist action, props, and background.
 Do not add ungrounded new characters or props.
 Seed: {seed}
 DCEE plan: {dce_plan}
@@ -260,12 +315,12 @@ Return the same JSON array.
 
 def eval_questions_prompt(dce_plan: dict, emotion_arc: dict, storyboard: list) -> str:
     return f"""
-Generate VQA-style questions for grounded DCEE visual storytelling evaluation.
+Generate VQA-style questions for grounded protagonist-only DCEE visual storytelling evaluation.
 Return JSON with global_questions, frame_questions, ending_questions.
 Questions must cover:
 - exact story sentence alignment
-- event visibility
-- required object visibility
+- protagonist event visibility
+- required prop/background visibility
 - emotional cause visibility
 - protagonist consistency
 - world/background consistency
@@ -278,10 +333,11 @@ Storyboard: {storyboard}
 def frame_prompt(frame: dict, dce_plan: dict, emotion_arc: dict, memory: dict, style: str, input_image_summary: dict | None) -> str:
     return f"""
 {style}, full-color cinematic storybook illustration.
+Protagonist-only frame. Do not add secondary characters.
 Exact story sentence: {frame.get('story_sentence') or frame.get('caption')}
-Visible action: {frame.get('event')}
+Visible protagonist action: {frame.get('event')}
 Visible cause: {frame.get('event_grounding')}
-Required objects: {frame.get('must_show') or frame.get('key_objects')}
+Required props/background: {frame.get('must_show') or frame.get('key_objects')}
 Emotion: {frame.get('emotion')} intensity {frame.get('emotion_intensity')}/5; {frame.get('emotion_visual_rule')}
 World: {frame.get('scene_location')}, {frame.get('time_of_day')}, {frame.get('weather')}, {frame.get('atmosphere')}, {frame.get('environment_details')}
 Memory: {memory}

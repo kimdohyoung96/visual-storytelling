@@ -21,7 +21,12 @@ from .prompts import (
 )
 from .utils import extract_json
 
-_SPECIAL_STORY_TERMS = ["woodcutter", "lumberjack", "axe", "fairy", "golden axe", "silver axe"]
+_SPECIAL_STORY_TERMS = [
+    "woodcutter", "lumberjack", "axe", "fairy", "golden axe", "silver axe",
+    "friend", "friends", "animal friend", "animal friends", "wild animal friend", "wild animal friends",
+    "helper", "helpers", "villager", "villagers", "human", "hunter", "traveler", "stranger",
+    "rabbit", "fox", "deer", "bird", "squirrel", "monkey", "another panda", "other panda",
+]
 
 
 def _field_names(cls) -> set[str]:
@@ -155,6 +160,61 @@ def _sanitize_nested(value: Any, forbidden_terms: List[str], protagonist: str):
     return value
 
 
+_AGENT_WORDS = {
+    "friend", "friends", "animal friend", "animal friends", "wild animal friend", "wild animal friends",
+    "helper", "helpers", "villager", "villagers", "human", "hunter", "woodcutter", "lumberjack",
+    "fairy", "traveler", "stranger", "rabbit", "fox", "deer", "bird", "squirrel", "monkey",
+    "another panda", "other panda",
+}
+
+
+def _is_agent_like(text: Any, protagonist: str) -> bool:
+    s = _clean_text(text).lower()
+    if not s:
+        return False
+    p = _clean_text(protagonist).lower()
+    if p and s == p:
+        return False
+    return any(w in s for w in _AGENT_WORDS)
+
+
+def _filter_protagonist_only_objects(items: Any, protagonist: str) -> List[str]:
+    """Keep props/background objects, remove secondary characters/agents."""
+    out: List[str] = []
+    for item in _string_list(items):
+        low = item.lower()
+        if _is_agent_like(low, protagonist):
+            continue
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def _force_protagonist_only_step(data: Dict[str, Any], protagonist: str) -> Dict[str, Any]:
+    data = dict(data or {})
+    data["subject"] = protagonist
+    data["supporting_cast"] = []
+    data["characters"] = [protagonist]
+
+    for key in ["sentence", "action", "visible_cause", "continuity_notes"]:
+        if key in data:
+            data[key] = _replace_forbidden_text(str(data.get(key, "")), list(_AGENT_WORDS), protagonist)
+
+    data["required_objects"] = _filter_protagonist_only_objects(data.get("required_objects", []), protagonist)
+    data["background_elements"] = _filter_protagonist_only_objects(data.get("background_elements", []), protagonist)
+    if not data["required_objects"]:
+        data["required_objects"] = _filter_protagonist_only_objects([
+            protagonist,
+            data.get("object", ""),
+            data.get("location", ""),
+            "foreground prop",
+        ], protagonist)
+    data["object"] = _clean_text(data.get("object", ""))
+    if _is_agent_like(data["object"], protagonist):
+        data["object"] = data["required_objects"][0] if data["required_objects"] else ""
+    return data
+
+
 def _grounded_terms(sample: Dict[str, Any], image_summary: ImageUnderstanding | None) -> List[str]:
     terms: List[str] = []
     for key in ["protagonist", "text_prompt", "style", "genre", "setting", "outfit", "age_group", "gender"]:
@@ -246,7 +306,7 @@ class DCEPlanner:
 
     def build_seed(self, sample: Dict[str, Any], image_summary: ImageUnderstanding | None) -> StorySeed:
         forbidden = _forbidden_terms(sample, image_summary)
-        prompt = story_seed_prompt(sample, _to_dict(image_summary) if image_summary else None, forbidden)
+        prompt = story_seed_prompt(sample, _to_dict(image_summary) if image_summary else None, forbidden, protagonist_only=True)
 
         def _validate(data):
             for key in ["setting", "objects", "characters", "mood", "visual_symbols", "world_context", "character_profiles"]:
@@ -254,12 +314,14 @@ class DCEPlanner:
                     raise ValueError(f"missing key: {key}")
             if not _string_list(data.get("objects")):
                 raise ValueError("objects cannot be empty")
-            if _contains_forbidden(data, forbidden):
-                raise ValueError(f"contains forbidden ungrounded entities: {forbidden}")
+            if _contains_forbidden(data, forbidden) or _contains_forbidden(data, list(_AGENT_WORDS)):
+                raise ValueError(f"contains forbidden ungrounded agents: {forbidden}")
 
         data = self._llm_json_strict(prompt, "build_seed", max_tokens=1200, validate=_validate, repair_hint="Use only grounded entities from the input/image summary.")
         protagonist = sample.get("protagonist", "protagonist")
-        data = _sanitize_nested(data, forbidden, protagonist)
+        data = _sanitize_nested(data, forbidden + list(_AGENT_WORDS), protagonist)
+        data["characters"] = [protagonist]
+        data["objects"] = _filter_protagonist_only_objects(data.get("objects", []), protagonist)
 
         profiles = data.get("character_profiles", []) or []
         if not profiles:
@@ -299,7 +361,7 @@ class DCEPlanner:
 
     def generate_abstract(self, seed: StorySeed) -> str:
         forbidden = getattr(seed, "forbidden_ungrounded_entities", []) or []
-        text = self._llm_text(story_abstract_prompt(_to_dict(seed), forbidden), max_tokens=500, temperature=0.35)
+        text = self._llm_text(story_abstract_prompt(_to_dict(seed), forbidden, protagonist_only=True), max_tokens=500, temperature=0.35)
         text = _replace_forbidden_text(text, forbidden, getattr(seed, "protagonist", "protagonist"))
         if not _clean_text(text):
             raise RuntimeError("Abstract is empty.")
@@ -307,7 +369,7 @@ class DCEPlanner:
 
     def generate_dce_plan(self, seed: StorySeed, abstract: str) -> DCEPlan:
         forbidden = getattr(seed, "forbidden_ungrounded_entities", []) or []
-        prompt = dcee_plan_prompt(_to_dict(seed), abstract, forbidden)
+        prompt = dcee_plan_prompt(_to_dict(seed), abstract, forbidden, protagonist_only=True)
 
         def _validate(data):
             for key in ["desire", "conflict", "target_ending_emotion"]:
@@ -316,12 +378,12 @@ class DCEPlanner:
             ev = data.get("event_chain", data.get("event_spine", []))
             if not ev:
                 raise ValueError("event_chain is empty")
-            if _contains_forbidden(data, forbidden):
-                raise ValueError("plan contains forbidden ungrounded entities")
+            if _contains_forbidden(data, forbidden) or _contains_forbidden(data, list(_AGENT_WORDS)):
+                raise ValueError("plan contains forbidden ungrounded agents")
 
         data = self._llm_json_strict(prompt, "generate_dce_plan", max_tokens=1200, validate=_validate, repair_hint="Return one grounded DCEE plan using only the seed entities.")
         protagonist = getattr(seed, "protagonist", "protagonist")
-        data = _sanitize_nested(data, forbidden, protagonist)
+        data = _sanitize_nested(data, forbidden + list(_AGENT_WORDS), protagonist)
         event_chain = data.get("event_chain", data.get("event_spine", []))
         if isinstance(event_chain, str):
             event_chain = [event_chain]
@@ -375,7 +437,7 @@ class DCEPlanner:
     def generate_story_step(self, seed: StorySeed, abstract: str, dce_plan: DCEPlan, emotion_arc: EmotionArc, story_so_far: List[Dict[str, Any]], previous_frame: StoryboardFrame | None, frame_index: int, num_frames: int) -> Dict[str, Any]:
         forbidden = getattr(seed, "forbidden_ungrounded_entities", []) or []
         prev_dict = _to_dict(previous_frame) if previous_frame is not None else None
-        prompt = next_story_sentence_prompt(_to_dict(seed), _to_dict(dce_plan), _to_dict(emotion_arc), story_so_far, prev_dict, frame_index, num_frames, forbidden)
+        prompt = next_story_sentence_prompt(_to_dict(seed), _to_dict(dce_plan), _to_dict(emotion_arc), story_so_far, prev_dict, frame_index, num_frames, forbidden, protagonist_only=True)
 
         def _validate(data):
             for key in ["sentence", "action", "location", "emotion", "visible_cause", "required_objects"]:
@@ -385,12 +447,13 @@ class DCEPlanner:
                 raise ValueError("sentence is empty")
             if not _string_list(data.get("required_objects")):
                 raise ValueError("required_objects empty")
-            if _contains_forbidden(data, forbidden):
-                raise ValueError("story step contains forbidden ungrounded entities")
+            if _contains_forbidden(data, forbidden) or _contains_forbidden(data, list(_AGENT_WORDS)):
+                raise ValueError("story step contains forbidden ungrounded agents")
 
         data = self._llm_json_strict(prompt, f"generate_story_step_{frame_index+1}", max_tokens=700, validate=_validate, repair_hint="Make the sentence easy to draw, grounded, and free of ungrounded entities.")
         protagonist = getattr(seed, "protagonist", "protagonist")
-        data = _sanitize_nested(data, forbidden, protagonist)
+        data = _sanitize_nested(data, forbidden + list(_AGENT_WORDS), protagonist)
+        data = _force_protagonist_only_step(data, protagonist)
         data["frame_id"] = frame_index + 1
         data["sentence"] = _clean_text(data.get("sentence"))
         data["image_sentence"] = data["sentence"]
@@ -433,13 +496,13 @@ class DCEPlanner:
             "event_grounding": step.get("visible_cause", ""),
             "emotion_evidence": _string_list(step.get("required_objects"))[:4],
             "evidence_objects": _string_list(step.get("required_objects"))[:6],
-            "must_show": _unique(_string_list(step.get("required_objects")) + _string_list(step.get("background_elements")) + _string_list(step.get("supporting_cast"))),
+            "must_show": _unique(_filter_protagonist_only_objects(_string_list(step.get("required_objects")) + _string_list(step.get("background_elements")), getattr(seed, "protagonist", "protagonist"))),
             "scene_location": step.get("location", ""),
             "time_of_day": step.get("time_of_day", ""),
             "weather": step.get("weather", ""),
             "atmosphere": step.get("atmosphere", ""),
             "environment_details": _string_list(step.get("background_elements")),
-            "supporting_cast": _string_list(step.get("supporting_cast")),
+            "supporting_cast": [],
             "scene_transition": _clean_text(step.get("continuity_notes", "")),
             "character_identity": getattr(seed, "protagonist", "protagonist"),
             "character_reference_prompt": getattr((getattr(seed, "character_profiles", []) or [None])[0], "identity_anchor_prompt", ""),

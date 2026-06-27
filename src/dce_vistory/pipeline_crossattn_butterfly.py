@@ -179,6 +179,23 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         seed = self.planner.build_seed(sample, image_summary)
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
+        generation_policy = {
+            "version": "V19",
+            "mode": "protagonist_only_incremental",
+            "protagonist_only": True,
+            "no_secondary_characters": True,
+            "allowed_visual_elements": [
+                "protagonist",
+                "protagonist props",
+                "background objects",
+                "weather",
+                "lighting",
+                "emotion cues"
+            ],
+            "blocked_story_entities": getattr(seed, "forbidden_ungrounded_entities", []),
+            "reason": "When extra agents appear in story, SDXL may omit them or turn them into protagonist-like objects. V19 removes secondary agents from story generation."
+        }
+        _write_json(out_dir / "generation_policy_V19.json", generation_policy)
         total_frames = int(sample.get("num_frames", 6))
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, total_frames)
 
@@ -318,6 +335,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "storyboard": str(out_dir / "storyboard.json"),
             "full_story": str(out_dir / "full_story.json"),
             "dcee_plan": str(out_dir / "dcee_plan.json"),
+            "generation_policy_V19": str(out_dir / "generation_policy_V19.json"),
             "has_contact_sheet": (out_dir / "contact_sheet.png").exists(),
             "num_selected_images": len(selected_images),
         })
