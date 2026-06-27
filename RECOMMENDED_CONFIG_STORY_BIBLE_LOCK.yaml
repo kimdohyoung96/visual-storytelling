@@ -1,0 +1,23 @@
+image_generator:
+  # Use reference image lightly for identity only. Too high scale copies pose/background and makes frames similar.
+  use_ip_adapter: true
+  ip_adapter_scale: 0.28
+
+  # Keep false unless you have a trained adapter checkpoint.
+  use_butterfly_adapter: false
+
+  num_candidates_per_frame: 5
+  num_ending_candidates: 6
+  guidance_scale: 8.5
+
+evaluation:
+  use_vlm: true
+  use_local_caption_scorer: true
+  save_contact_sheet: true
+
+pipeline:
+  emotion_retry: true
+  story_alignment_threshold: 0.76
+  event_grounding_threshold: 0.72
+  evidence_visibility_threshold: 0.70
+  continuity_threshold: 0.68
