@@ -31,6 +31,7 @@ QUALITY_SUFFIX = (
 NEGATIVE_PROMPT = (
     "monochrome, black and white, grayscale, pencil sketch, line art only, colorless image, "
     "extra character, secondary character, crowd, unrelated animal, unrelated human, duplicated protagonist, "
+    "extra prop, unrelated object, unrelated background object, extra scene element not mentioned in the story, "
     "missing protagonist, missing action, missing required prop, missing visual evidence, emotionless face, weak expression, stiff pose, portrait only, "
     "empty background, low quality, blurry, bad anatomy, distorted face, watermark, text"
 )
@@ -333,14 +334,20 @@ Storyboard: {storyboard}
 def frame_prompt(frame: dict, dce_plan: dict, emotion_arc: dict, memory: dict, style: str, input_image_summary: dict | None) -> str:
     return f"""
 {style}, full-color cinematic storybook illustration.
-Protagonist-only frame. Do not add secondary characters.
+V20 STORY-LOCKED RENDERING RULES:
+- Generate exactly one image for this frame.
+- Show exactly one protagonist and no secondary characters.
+- Render only the story content specified below.
+- Do not add extra objects, props, animals, people, or scene elements that are not listed.
+- If uncertain, prefer omission over hallucination.
 Exact story sentence: {frame.get('story_sentence') or frame.get('caption')}
 Visible protagonist action: {frame.get('event')}
 Visible cause: {frame.get('event_grounding')}
-Required props/background: {frame.get('must_show') or frame.get('key_objects')}
+Allowed visual inventory only: {frame.get('must_show') or frame.get('key_objects')}
 Emotion: {frame.get('emotion')} intensity {frame.get('emotion_intensity')}/5; {frame.get('emotion_visual_rule')}
-World: {frame.get('scene_location')}, {frame.get('time_of_day')}, {frame.get('weather')}, {frame.get('atmosphere')}, {frame.get('environment_details')}
-Memory: {memory}
+World/background: {frame.get('scene_location')}, {frame.get('time_of_day')}, {frame.get('weather')}, {frame.get('atmosphere')}, {frame.get('environment_details')}
+Continuity memory: {memory}
 Quality: {QUALITY_SUFFIX}
 Negative: {NEGATIVE_PROMPT}
 """.strip()
+

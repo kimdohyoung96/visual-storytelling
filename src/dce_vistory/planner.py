@@ -234,44 +234,40 @@ def _extract_seed_visual_terms(seed: Any, limit: int = 8) -> List[str]:
 
 def _derive_required_objects(data: Dict[str, Any], seed: Any, protagonist: str) -> List[str]:
     """
-    V19 safety net:
-    LLMs sometimes return required_objects=[] even when the sentence is valid.
-    Do not stop the run. Reconstruct required objects from grounded fields.
+    V20 story-locked repair:
+    reconstruct only the minimum grounded set of props/background objects needed for the current sentence.
     """
-    items: List[str] = []
-    items.extend(_string_list(data.get("required_objects", [])))
-    items.extend(_string_list(data.get("object", "")))
-    items.extend(_string_list(data.get("location", "")))
-    items.extend(_string_list(data.get("background_elements", [])))
-    items.extend(_string_list(data.get("visible_cause", "")))
-
-    # Grounded seed terms are safe because they come from the current input/image summary.
-    items.extend(_extract_seed_visual_terms(seed, limit=8))
-
-    # Always keep protagonist visible as the main subject.
-    items.insert(0, protagonist)
-
-    cleaned = _filter_protagonist_only_objects(items, protagonist)
-    cleaned = _unique([x for x in cleaned if _clean_text(x)])
-
+    cleaned = _story_locked_visual_inventory(data, seed, protagonist)
     if not cleaned:
-        cleaned = [protagonist, "simple background", "visible foreground prop"]
-    elif len(cleaned) == 1:
-        cleaned.append("simple background")
-
-    return cleaned[:10]
+        cleaned = ["simple background"]
+    return cleaned[:4]
 
 
 def _derive_background_elements(data: Dict[str, Any], seed: Any, protagonist: str) -> List[str]:
     items: List[str] = []
-    items.extend(_string_list(data.get("background_elements", [])))
     items.extend(_string_list(data.get("location", "")))
-    items.extend(_extract_seed_visual_terms(seed, limit=6))
+    items.extend(_string_list(data.get("background_elements", []))[:2])
+    if not items:
+        items.extend(_extract_seed_visual_terms(seed, limit=2))
     cleaned = _filter_protagonist_only_objects(items, protagonist)
-    cleaned = [x for x in cleaned if _clean_text(x) and x != protagonist]
+    cleaned = [x for x in _unique(cleaned) if _clean_text(x) and x != protagonist]
     if not cleaned:
         cleaned = ["simple grounded background"]
-    return _unique(cleaned)[:8]
+    return cleaned[:3]
+
+
+def _story_locked_visual_inventory(data: Dict[str, Any], seed: Any, protagonist: str) -> List[str]:
+    """Return the smallest grounded set of visual items needed for the current sentence."""
+    items: List[str] = []
+    items.extend(_string_list(data.get("object", "")))
+    items.extend(_string_list(data.get("location", "")))
+    items.extend(_string_list(data.get("background_elements", []))[:2])
+    items.extend(_string_list(data.get("visible_cause", ""))[:1])
+    if len([x for x in items if _clean_text(x)]) < 2:
+        items.extend(_extract_seed_visual_terms(seed, limit=2))
+    cleaned = _filter_protagonist_only_objects(items, protagonist)
+    cleaned = [x for x in _unique(cleaned) if _clean_text(x) and _clean_text(x).lower() != _clean_text(protagonist).lower()]
+    return cleaned[:4]
 
 
 def _grounded_terms(sample: Dict[str, Any], image_summary: ImageUnderstanding | None) -> List[str]:
@@ -530,6 +526,8 @@ class DCEPlanner:
         data["emotion_intensity"] = int(data.get("emotion_intensity") or (intensities[frame_index] if frame_index < len(intensities) else 3))
         data["required_objects"] = _derive_required_objects(data, seed, protagonist)
         data["background_elements"] = _derive_background_elements(data, seed, protagonist)
+        data["supporting_cast"] = []
+        data["characters"] = [protagonist]
         return data
 
     def story_step_to_frame(self, seed: StorySeed, dce_plan: DCEPlan, emotion_arc: EmotionArc, step: Dict[str, Any], frame_index: int, num_frames: int) -> StoryboardFrame:
@@ -564,12 +562,12 @@ class DCEPlanner:
             "event_grounding": step.get("visible_cause", ""),
             "emotion_evidence": _string_list(step.get("required_objects"))[:4],
             "evidence_objects": _string_list(step.get("required_objects"))[:6],
-            "must_show": _unique(_filter_protagonist_only_objects(_string_list(step.get("required_objects")) + _string_list(step.get("background_elements")), getattr(seed, "protagonist", "protagonist"))),
+            "must_show": _unique(_story_locked_visual_inventory(step, seed, getattr(seed, "protagonist", "protagonist"))),
             "scene_location": step.get("location", ""),
             "time_of_day": step.get("time_of_day", ""),
             "weather": step.get("weather", ""),
             "atmosphere": step.get("atmosphere", ""),
-            "environment_details": _string_list(step.get("background_elements")),
+            "environment_details": _string_list(step.get("background_elements"))[:3],
             "supporting_cast": [],
             "scene_transition": _clean_text(step.get("continuity_notes", "")),
             "character_identity": getattr(seed, "protagonist", "protagonist"),

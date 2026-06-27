@@ -42,6 +42,19 @@ def _write_json(path: Path, obj: Any):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(_safe_asdict(obj), ensure_ascii=False, indent=2), encoding="utf-8")
 
+def _clear_generated_pngs(*dirs: Path):
+    """Remove stale candidate images so each run/frame folder contains only newly generated outputs."""
+    for d in dirs:
+        d = Path(d)
+        if not d.exists():
+            continue
+        for pattern in ["frame_*_cand_*.png", "frame_*.png", "*.tmp.png"]:
+            for p in d.glob(pattern):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+
 
 def _image_path_exists(path: Any) -> bool:
     if not path:
@@ -173,6 +186,9 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         out_dir.mkdir(parents=True, exist_ok=True)
         frames_dir.mkdir(parents=True, exist_ok=True)
         ending_dir.mkdir(parents=True, exist_ok=True)
+        # V20.1: clean stale candidate images from previous runs in the same output folder.
+        # This guarantees the output directory visually contains one newly generated image per frame.
+        _clear_generated_pngs(frames_dir, ending_dir)
 
         run_errors: List[Dict[str, Any]] = []
         image_summary = self.image_understanding.analyze(sample.get("image_path"), sample)
@@ -180,10 +196,13 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         generation_policy = {
-            "version": "V19",
-            "mode": "protagonist_only_incremental",
+            "version": "V20.1",
+            "mode": "single_image_storylocked",
             "protagonist_only": True,
             "no_secondary_characters": True,
+            "single_image_per_frame": True,
+            "cleanup_stale_candidates": True,
+            "story_locked_rendering": True,
             "allowed_visual_elements": [
                 "protagonist",
                 "protagonist props",
@@ -195,7 +214,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "blocked_story_entities": getattr(seed, "forbidden_ungrounded_entities", []),
             "reason": "When extra agents appear in story, SDXL may omit them or turn them into protagonist-like objects. V19 removes secondary agents from story generation."
         }
-        _write_json(out_dir / "generation_policy_V19.json", generation_policy)
+        _write_json(out_dir / "generation_policy_V20.json", generation_policy)
         total_frames = int(sample.get("num_frames", 6))
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, total_frames)
 
@@ -216,9 +235,9 @@ class CrossAttentionButterflyDCEViStoryPipeline:
 
         img_cfg = self.cfg.get("image_generator", {})
         pipe_cfg = self.cfg.get("pipeline", {})
-        num_candidates = int(img_cfg.get("num_candidates_per_frame", 2))
-        num_ending_candidates = int(img_cfg.get("num_ending_candidates", 5))
-        retry_enabled = bool(pipe_cfg.get("emotion_retry", True))
+        num_candidates = 1  # V20: exactly one image per non-ending frame
+        num_ending_candidates = 1  # V20: exactly one image for the ending frame as well
+        retry_enabled = False  # V20: disable retry so each frame writes exactly one image
         emotion_threshold = float(pipe_cfg.get("emotion_visibility_threshold", 0.74))
         color_threshold = float(pipe_cfg.get("colorfulness_threshold", 0.35))
         event_threshold = float(pipe_cfg.get("event_grounding_threshold", 0.68))
@@ -233,7 +252,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             frame_id = idx + 1
             is_last = idx == total_frames - 1
             target_dir = ending_dir if is_last else frames_dir
-            candidate_count = num_ending_candidates if is_last else num_candidates
+            candidate_count = 1  # V20: force exactly one image per frame
 
             story_step = self.planner.generate_story_step(seed, abstract, dce_plan, emotion_arc, story_rows, previous_frame, idx, total_frames)
             story_rows.append(story_step)
@@ -335,7 +354,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "storyboard": str(out_dir / "storyboard.json"),
             "full_story": str(out_dir / "full_story.json"),
             "dcee_plan": str(out_dir / "dcee_plan.json"),
-            "generation_policy_V19": str(out_dir / "generation_policy_V19.json"),
+            "generation_policy_V19": str(out_dir / "generation_policy_V20.json"),
             "has_contact_sheet": (out_dir / "contact_sheet.png").exists(),
             "num_selected_images": len(selected_images),
         })
