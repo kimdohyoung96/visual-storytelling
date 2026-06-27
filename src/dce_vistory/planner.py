@@ -216,6 +216,42 @@ def _force_protagonist_only_step(data: Dict[str, Any], protagonist: str) -> Dict
 
 
 
+
+
+_ABSTRACT_CAUSE_WORDS = {
+    "desire", "fear", "loss", "journey", "emotion", "feeling", "feelings", "reflection", "reflects",
+    "bittersweet", "nature", "heavy heart", "honesty", "importance", "disappointment", "acceptance",
+    "the desire", "the fear", "the loss", "the need", "cause", "evidence"
+}
+
+
+def _is_abstract_or_clause(text: Any) -> bool:
+    s = _clean_text(text).lower()
+    if not s:
+        return True
+    if len(s.split()) > 4:
+        return True
+    return any(w in s for w in _ABSTRACT_CAUSE_WORDS)
+
+
+def _visual_inventory_items(items: Any, protagonist: str, limit: int = 6) -> List[str]:
+    out: List[str] = []
+    for item in _string_list(items):
+        item = _clean_text(item)
+        low = item.lower()
+        if not item:
+            continue
+        if low == _clean_text(protagonist).lower():
+            out.append(item)
+            continue
+        if _is_agent_like(item, protagonist):
+            continue
+        if _is_abstract_or_clause(item):
+            continue
+        if item not in out:
+            out.append(item)
+    return out[:limit]
+
 def _extract_seed_visual_terms(seed: Any, limit: int = 8) -> List[str]:
     """Collect grounded props/background terms from seed without adding new agents."""
     terms: List[str] = []
@@ -234,44 +270,35 @@ def _extract_seed_visual_terms(seed: Any, limit: int = 8) -> List[str]:
 
 def _derive_required_objects(data: Dict[str, Any], seed: Any, protagonist: str) -> List[str]:
     """
-    V19 safety net:
-    LLMs sometimes return required_objects=[] even when the sentence is valid.
-    Do not stop the run. Reconstruct required objects from grounded fields.
+    V22 story-locked required object repair.
+    Only keep concrete visual inventory. Do not convert abstract emotional causes
+    like "loss of the jar" into visible required objects.
     """
     items: List[str] = []
-    items.extend(_string_list(data.get("required_objects", [])))
-    items.extend(_string_list(data.get("object", "")))
-    items.extend(_string_list(data.get("location", "")))
-    items.extend(_string_list(data.get("background_elements", [])))
-    items.extend(_string_list(data.get("visible_cause", "")))
-
-    # Grounded seed terms are safe because they come from the current input/image summary.
-    items.extend(_extract_seed_visual_terms(seed, limit=8))
-
-    # Always keep protagonist visible as the main subject.
     items.insert(0, protagonist)
-
-    cleaned = _filter_protagonist_only_objects(items, protagonist)
-    cleaned = _unique([x for x in cleaned if _clean_text(x)])
-
+    items.extend(_string_list(data.get("object", "")))
+    items.extend(_string_list(data.get("required_objects", [])))
+    items.extend(_string_list(data.get("location", "")))
+    items.extend(_string_list(data.get("background_elements", []))[:3])
+    cleaned = _visual_inventory_items(items, protagonist, limit=7)
     if not cleaned:
-        cleaned = [protagonist, "simple background", "visible foreground prop"]
-    elif len(cleaned) == 1:
-        cleaned.append("simple background")
-
-    return cleaned[:10]
+        cleaned = [protagonist, "simple grounded background"]
+    return cleaned[:7]
 
 
 def _derive_background_elements(data: Dict[str, Any], seed: Any, protagonist: str) -> List[str]:
     items: List[str] = []
-    items.extend(_string_list(data.get("background_elements", [])))
     items.extend(_string_list(data.get("location", "")))
-    items.extend(_extract_seed_visual_terms(seed, limit=6))
-    cleaned = _filter_protagonist_only_objects(items, protagonist)
-    cleaned = [x for x in cleaned if _clean_text(x) and x != protagonist]
+    items.extend(_string_list(data.get("background_elements", []))[:3])
+    cleaned = _visual_inventory_items(items, protagonist, limit=4)
+    cleaned = [x for x in cleaned if _clean_text(x).lower() != _clean_text(protagonist).lower()]
+    if not cleaned:
+        wc = getattr(seed, "world_context", {}) or {}
+        if isinstance(wc, dict):
+            cleaned = _visual_inventory_items([wc.get("setting", ""), wc.get("weather", ""), wc.get("environment", "")], protagonist, limit=3)
     if not cleaned:
         cleaned = ["simple grounded background"]
-    return _unique(cleaned)[:8]
+    return cleaned[:4]
 
 
 def _grounded_terms(sample: Dict[str, Any], image_summary: ImageUnderstanding | None) -> List[str]:
@@ -702,7 +729,7 @@ class DCEPlanner:
             "event_grounding": step.get("visible_cause", ""),
             "emotion_evidence": _string_list(step.get("required_objects"))[:4],
             "evidence_objects": _string_list(step.get("required_objects"))[:6],
-            "must_show": _unique(_filter_protagonist_only_objects(_string_list(step.get("required_objects")) + _string_list(step.get("background_elements")), getattr(seed, "protagonist", "protagonist"))),
+            "must_show": _derive_required_objects(step, seed, getattr(seed, "protagonist", "protagonist")),
             "scene_location": step.get("location", ""),
             "time_of_day": step.get("time_of_day", world_context.get("time_of_day", "")),
             "weather": step.get("weather", world_context.get("weather", "")),

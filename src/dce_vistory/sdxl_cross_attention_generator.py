@@ -24,22 +24,15 @@ def _load_rgb_image(path: str, size=(1024, 1024)):
     return img
 
 def _combine_reference_images(paths: List[str], size=(1024, 1024)):
+    """V22: avoid reference collages by default because collages can create duplicate protagonists.
+    Use only the primary input subject image as IP-Adapter identity reference.
+    Previous frame continuity is injected as text in the prompt, not as an image collage.
+    """
     valid = [str(p) for p in paths if _path_exists(p)]
     if not valid:
         return None, ''
-    imgs = [_load_rgb_image(p, size=(size[0] // max(1, min(3, len(valid))), size[1])) for p in valid[:3]]
-    if len(imgs) == 1:
-        return imgs[0], valid[0]
-    cols = len(imgs)
-    w = max(1, size[0] // cols)
-    canvas = Image.new('RGB', size, 'white')
-    for i, img in enumerate(imgs):
-        local = img.copy()
-        local.thumbnail((w - 8, size[1] - 8))
-        x0 = i * w + (w - local.width) // 2
-        y0 = (size[1] - local.height) // 2
-        canvas.paste(local, (x0, y0))
-    return canvas, ' | '.join(valid[:3])
+    img = _load_rgb_image(valid[0], size=size)
+    return img, valid[0]
 
 
 def _spec_from_packet(packet: VisualControlPacket) -> FrameVisualSpec:
@@ -163,18 +156,13 @@ class SDXLButterflyCrossAttentionGenerator:
 
     def _reference_image_for_packet(self, packet):
         refs = getattr(packet, "reference_images", {}) or {}
+        meta = getattr(packet, "control_metadata", {}) or {}
         paths = []
-        if refs.get('subject'):
-            paths.append(refs.get('subject'))
-        mem = refs.get('memory_sequence', []) or []
-        if isinstance(mem, str):
-            mem = [mem]
-        paths.extend(mem[:2])
-        if not paths:
-            meta = packet.control_metadata or {}
-            src = meta.get('source_reference_image_path', '')
-            if _path_exists(src):
-                paths.append(src)
+        # V22: identity anchor should be the input image first. Do not create a collage of prior generated frames.
+        if refs.get("subject"):
+            paths.append(refs.get("subject"))
+        elif meta.get("source_reference_image_path"):
+            paths.append(meta.get("source_reference_image_path"))
         img, desc = _combine_reference_images(paths, size=(1024, 1024))
         if img is not None:
             return img, desc

@@ -194,7 +194,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         )
         packet.negative_prompt += (
             "; split screen; diptych; triptych; comic panel; storyboard sheet; collage; multiple moments in one frame"
-            "; extra character; extra animal; duplicated protagonist; wrong protagonist identity; wrong species; missing background"
+            "; extra character; extra animal; duplicated protagonist; no second protagonist; no duplicate protagonist; two bears; multiple bears; wrong protagonist identity; wrong species; wrong fur color; missing background"
             "; missing required object; unrelated object; unrelated prop; generic portrait; wrong fur color; weak emotion"
         )
         if identity_neg:
@@ -247,21 +247,22 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         generation_policy = {
-            "version": "V21",
-            "mode": "protagonist_only_incremental_image_grounded",
+            "version": "V22",
+            "mode": "storylocked_candidate_selection_final",
             "protagonist_only": True,
             "single_scene_per_frame": True,
             "multiple_candidates_for_selection": True,
             "input_image_is_hard_identity_anchor": True,
             "story_sentence_locked": True,
-            "previous_selected_frame_used_for_continuity": True,
+            "previous_selected_frame_used_for_text_continuity": True,
+            "previous_generated_images_not_used_as_ip_reference_by_default": True,
             "allowed_visual_elements": [
                 "protagonist", "protagonist props", "grounded background objects", "weather", "lighting", "emotion cues"
             ],
             "blocked_story_entities": getattr(seed, "forbidden_ungrounded_entities", []),
             "reason": "V21 strengthens image identity grounding, exact story-to-image alignment, and continuity from the previous selected frame."
         }
-        _write_json(out_dir / "generation_policy_V21.json", generation_policy)
+        _write_json(out_dir / "generation_policy_V22.json", generation_policy)
         total_frames = int(sample.get("num_frames", 6))
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, total_frames)
 
@@ -408,7 +409,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "storyboard": str(out_dir / "storyboard.json"),
             "full_story": str(out_dir / "full_story.json"),
             "dcee_plan": str(out_dir / "dcee_plan.json"),
-            "generation_policy_V21": str(out_dir / "generation_policy_V21.json"),
+            "generation_policy_V21": str(out_dir / "generation_policy_V22.json"),
             "has_contact_sheet": (out_dir / "contact_sheet.png").exists(),
             "num_selected_images": len(selected_images),
         })

@@ -9,7 +9,7 @@ Never import characters, occupations, props, or scenes from unrelated example st
 If JSON is requested, return concise valid JSON only.
 Core structure: Desire -> Conflict -> Event Chain -> Ending Emotion (DCEE).
 
-V21 POLICY:
+V22 POLICY:
 - The input image is a hard identity anchor. The protagonist's species, fur/skin/clothing color, age impression, body shape, and distinctive appearance must be preserved.
 - If the input subject is a white bear, keep a white bear in story and image generation; never drift to a brown bear or a different species.
 - The story must stay protagonist-centered and visually drawable.
@@ -31,7 +31,7 @@ QUALITY_SUFFIX = (
 NEGATIVE_PROMPT = (
     "monochrome, black and white, grayscale, pencil sketch, line art only, colorless image, "
     "split screen, comic panel, storyboard sheet, collage, diptych, triptych, multi-panel, multiple scenes in one frame, "
-    "extra character, secondary character, crowd, unrelated animal, unrelated human, duplicated protagonist, duplicate subject, "
+    "extra character, secondary character, crowd, unrelated animal, unrelated human, duplicated protagonist, duplicate subject, second bear, two bears, multiple bears, clone, mirror duplicate, "
     "missing protagonist, missing action, missing required prop, missing visual evidence, emotionless face, weak expression, stiff pose, portrait only, "
     "empty background, low quality, blurry, bad anatomy, distorted face, watermark, text"
 )
@@ -281,7 +281,7 @@ Previous frame:
 # ---------------------------------------------------------------------
 def eval_questions_prompt(dce_plan: dict, emotion_arc: dict, storyboard: list) -> str:
     return f"""
-Generate VQA-style questions for grounded V21 DCEE visual storytelling evaluation.
+Generate VQA-style questions for grounded V22 DCEE visual storytelling evaluation.
 Return valid JSON with keys: global_questions, frame_questions, ending_questions.
 
 Questions must cover:
@@ -394,7 +394,7 @@ Return the same JSON array.
 def frame_prompt(frame: dict, dce_plan: dict, emotion_arc: dict, memory: dict, style: str, input_image_summary: dict | None) -> str:
     return f"""
 {style}, full-color cinematic storybook illustration.
-V21 STORY-LOCKED SINGLE-SCENE RENDERING:
+V22 STORY-LOCKED SINGLE-SCENE RENDERING:
 - Generate one single coherent scene for this frame.
 - Do not create split-screen, comic panels, storyboard sheets, collage, diptych, or multiple moments in one image.
 - Show exactly one protagonist unless the input explicitly grounded another character.
@@ -415,4 +415,28 @@ Continuity memory: {memory}
 Input image summary: {input_image_summary}
 Quality: {QUALITY_SUFFIX}
 Negative: {NEGATIVE_PROMPT}
+""".strip()
+
+
+
+def candidate_selection_prompt(frame: dict, candidate_notes: list) -> str:
+    return f"""
+Select the best candidate for this V22 visual storytelling frame.
+Return JSON with selected_candidate_id and reason.
+
+Selection priority order:
+1. exactly one protagonist only, no duplicate/second protagonist
+2. one single coherent scene, no split-screen/multi-panel
+3. exact story sentence alignment
+4. main action visibility
+5. required object/background visibility
+6. emotion visibility
+7. protagonist identity consistency from input image
+8. image quality only after all story constraints
+
+Frame:
+{frame}
+
+Candidate notes:
+{candidate_notes}
 """.strip()
