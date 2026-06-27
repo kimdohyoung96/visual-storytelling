@@ -215,6 +215,65 @@ def _force_protagonist_only_step(data: Dict[str, Any], protagonist: str) -> Dict
     return data
 
 
+
+def _extract_seed_visual_terms(seed: Any, limit: int = 8) -> List[str]:
+    """Collect grounded props/background terms from seed without adding new agents."""
+    terms: List[str] = []
+    for attr in ["objects", "setting", "mood"]:
+        terms.extend(_string_list(getattr(seed, attr, "")))
+    wc = getattr(seed, "world_context", {}) or {}
+    if isinstance(wc, dict):
+        for key in ["setting", "background", "environment", "objects", "landmarks", "weather"]:
+            terms.extend(_string_list(wc.get(key, [])))
+    raw = getattr(seed, "raw_input", {}) or {}
+    if isinstance(raw, dict):
+        for key in ["objects", "setting", "background_elements", "signature_items"]:
+            terms.extend(_string_list(raw.get(key, [])))
+    return _unique([x for x in terms if _clean_text(x)])[:limit]
+
+
+def _derive_required_objects(data: Dict[str, Any], seed: Any, protagonist: str) -> List[str]:
+    """
+    V19 safety net:
+    LLMs sometimes return required_objects=[] even when the sentence is valid.
+    Do not stop the run. Reconstruct required objects from grounded fields.
+    """
+    items: List[str] = []
+    items.extend(_string_list(data.get("required_objects", [])))
+    items.extend(_string_list(data.get("object", "")))
+    items.extend(_string_list(data.get("location", "")))
+    items.extend(_string_list(data.get("background_elements", [])))
+    items.extend(_string_list(data.get("visible_cause", "")))
+
+    # Grounded seed terms are safe because they come from the current input/image summary.
+    items.extend(_extract_seed_visual_terms(seed, limit=8))
+
+    # Always keep protagonist visible as the main subject.
+    items.insert(0, protagonist)
+
+    cleaned = _filter_protagonist_only_objects(items, protagonist)
+    cleaned = _unique([x for x in cleaned if _clean_text(x)])
+
+    if not cleaned:
+        cleaned = [protagonist, "simple background", "visible foreground prop"]
+    elif len(cleaned) == 1:
+        cleaned.append("simple background")
+
+    return cleaned[:10]
+
+
+def _derive_background_elements(data: Dict[str, Any], seed: Any, protagonist: str) -> List[str]:
+    items: List[str] = []
+    items.extend(_string_list(data.get("background_elements", [])))
+    items.extend(_string_list(data.get("location", "")))
+    items.extend(_extract_seed_visual_terms(seed, limit=6))
+    cleaned = _filter_protagonist_only_objects(items, protagonist)
+    cleaned = [x for x in cleaned if _clean_text(x) and x != protagonist]
+    if not cleaned:
+        cleaned = ["simple grounded background"]
+    return _unique(cleaned)[:8]
+
+
 def _grounded_terms(sample: Dict[str, Any], image_summary: ImageUnderstanding | None) -> List[str]:
     terms: List[str] = []
     for key in ["protagonist", "text_prompt", "style", "genre", "setting", "outfit", "age_group", "gender"]:
@@ -440,20 +499,28 @@ class DCEPlanner:
         prompt = next_story_sentence_prompt(_to_dict(seed), _to_dict(dce_plan), _to_dict(emotion_arc), story_so_far, prev_dict, frame_index, num_frames, forbidden, protagonist_only=True)
 
         def _validate(data):
-            for key in ["sentence", "action", "location", "emotion", "visible_cause", "required_objects"]:
+            for key in ["sentence", "action", "location", "emotion", "visible_cause"]:
                 if key not in data:
                     raise ValueError(f"missing key: {key}")
+            if "required_objects" not in data:
+                data["required_objects"] = []
+            if "background_elements" not in data:
+                data["background_elements"] = []
             if not _clean_text(data.get("sentence")):
                 raise ValueError("sentence is empty")
-            if not _string_list(data.get("required_objects")):
-                raise ValueError("required_objects empty")
             if _contains_forbidden(data, forbidden) or _contains_forbidden(data, list(_AGENT_WORDS)):
                 raise ValueError("story step contains forbidden ungrounded agents")
+            # V19: required_objects can be repaired from grounded fields after parsing.
+            # Do not fail only because the LLM returned an empty list.
+            if not _string_list(data.get("required_objects")):
+                data["required_objects"] = _derive_required_objects(data, seed, getattr(seed, "protagonist", "protagonist"))
 
         data = self._llm_json_strict(prompt, f"generate_story_step_{frame_index+1}", max_tokens=700, validate=_validate, repair_hint="Make the sentence easy to draw, grounded, and free of ungrounded entities.")
         protagonist = getattr(seed, "protagonist", "protagonist")
         data = _sanitize_nested(data, forbidden + list(_AGENT_WORDS), protagonist)
         data = _force_protagonist_only_step(data, protagonist)
+        data["required_objects"] = _derive_required_objects(data, seed, protagonist)
+        data["background_elements"] = _derive_background_elements(data, seed, protagonist)
         data["frame_id"] = frame_index + 1
         data["sentence"] = _clean_text(data.get("sentence"))
         data["image_sentence"] = data["sentence"]
@@ -461,7 +528,8 @@ class DCEPlanner:
         intensities = getattr(emotion_arc, "intensities", []) or []
         data["emotion"] = _clean_text(data.get("emotion") or (states[frame_index] if frame_index < len(states) else ""))
         data["emotion_intensity"] = int(data.get("emotion_intensity") or (intensities[frame_index] if frame_index < len(intensities) else 3))
-        data["required_objects"] = _unique(_string_list(data.get("required_objects")) + _string_list(data.get("background_elements")))
+        data["required_objects"] = _derive_required_objects(data, seed, protagonist)
+        data["background_elements"] = _derive_background_elements(data, seed, protagonist)
         return data
 
     def story_step_to_frame(self, seed: StorySeed, dce_plan: DCEPlan, emotion_arc: EmotionArc, step: Dict[str, Any], frame_index: int, num_frames: int) -> StoryboardFrame:
