@@ -107,8 +107,12 @@ class ButterflyController:
         )
 
         salient_history = (memory or {}).get('salient_history', '')
+        multi_history = (memory or {}).get('multi_history_summary', salient_history)
         continuity = (memory or {}).get('continuity_constraints', {}) or {}
         continuity_text = '; '.join(f"{k}: {v}" for k, v in continuity.items() if v)
+        memory_entities = (memory or {}).get('entity_memory', []) or []
+        memory_world = (memory or {}).get('world_memory', []) or []
+        reference_memory_images = (memory or {}).get('reference_memory_images', []) or []
         anchor_text = str(anchors or {})
         source_reference_image_path = getattr(seed, 'source_image_path', '') or getattr(seed, 'image_path', '')
         frame_visual_spec = build_frame_visual_spec(frame, seed, getattr(seed, '_current_full_story', None), int(getattr(frame, 'frame_id', 1)) - 1, int(getattr(seed, '_total_frames', 6)), source_reference_image_path)
@@ -119,7 +123,7 @@ class ButterflyController:
         story_text = f"story sentence: {getattr(frame,'story_sentence','')}; alignment reason: {getattr(frame,'story_alignment_reason','')}; caption: {getattr(frame,'caption','')}"
         frame_goal_text = f"Frame goal: visualize exactly this narrative beat -> {getattr(frame,'story_sentence','')}. The visible scene must clearly show the event `{getattr(frame,'event','')}` and why the protagonist feels `{getattr(frame,'emotion','')}`."
         event_text = f"DCEE visible event: {getattr(frame,'event','')}; causal role: {getattr(frame,'event_causal_role','')}; event grounding: {getattr(frame,'event_grounding','')}; narrative function: {getattr(frame,'narrative_function','')}"
-        evidence_text = f"key objects: {getattr(frame,'key_objects',[])}; visual evidence objects: {getattr(frame,'evidence_objects',[])}; emotion evidence: {getattr(frame,'emotion_evidence',[])}; must show: {getattr(frame,'must_show',[])}; visual focus: {getattr(frame,'visual_focus','')}; scene must show both the event and the visible cause of the protagonist emotion"
+        evidence_text = f"key objects: {getattr(frame,'key_objects',[])}; visual evidence objects: {getattr(frame,'evidence_objects',[])}; emotion evidence: {getattr(frame,'emotion_evidence',[])}; must show: {getattr(frame,'must_show',[])}; memory entities: {memory_entities}; world memory: {memory_world}; visual focus: {getattr(frame,'visual_focus','')}; scene must show both the event and the visible cause of the protagonist emotion"
         world_text = world.to_prompt()
         emotion_text = emotion.to_prompt()
 
@@ -133,6 +137,7 @@ class ButterflyController:
 [WORLD] {world_text}
 [EMOTION CAUSED BY EVENT] {emotion_text}
 [SALIENT HISTORY] {salient_history}
+[MULTI HISTORY] {multi_history}
 [CONTINUITY CONSTRAINTS] {continuity_text}
 [PREVIOUS FRAME CONTEXT] {prev_text}
 [ANCHORS] {anchor_text}
@@ -144,6 +149,8 @@ Requirements:
 3. The scene must visibly show the event, the key evidence objects, and the emotional cause.
 4. The background, weather, lighting, and camera framing must support the specific narrative beat.
 5. Advance the story from the previous frame; do not repeat the same static composition.
+6. If the sentence mentions extra objects or side entities, they must appear visibly in the image.
+7. Use multiple relevant history frames together when needed; do not depend on a single past frame.
 """.strip()
         negative = self.negative_prompt + '; ' + character.negative_prompt + '; generic portrait only, static pose repetition, missing event, missing evidence, weak emotion, missing visual cause, empty background, inconsistent protagonist, child version, older version, gender changed, grayscale, monochrome'
         return VisualControlPacket(
@@ -160,8 +167,11 @@ Requirements:
                 'event_text': event_text,
                 'evidence_text': evidence_text,
                 'history_text': salient_history,
+                'multi_history_text': multi_history,
                 'continuity_text': continuity_text,
                 'anchor_text': anchor_text,
+                'memory_entities': memory_entities,
+                'memory_world': memory_world,
                 'dcee_event_text': event_text,
                 'event_causal_role': getattr(frame, 'event_causal_role', ''),
                 'event_grounding': getattr(frame, 'event_grounding', ''),
@@ -179,5 +189,5 @@ Requirements:
                 'source_reference_image_path': source_reference_image_path,
                 'frame_visual_spec': frame_visual_spec.to_dict(),
             },
-            reference_images={'subject': source_reference_image_path} if source_reference_image_path else {},
+            reference_images={'subject': source_reference_image_path, 'memory_sequence': reference_memory_images} if (source_reference_image_path or reference_memory_images) else {'memory_sequence': reference_memory_images},
         )

@@ -22,6 +22,7 @@ from .prompts import QUALITY_SUFFIX, NEGATIVE_PROMPT
 from .butterfly_adapter import ButterflyController
 from .sdxl_cross_attention_generator import SDXLButterflyCrossAttentionGenerator
 from .story_bible import build_story_bible
+from .story_graph import build_story_graph
 
 
 def _safe_asdict(obj: Any):
@@ -236,13 +237,16 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         storyboard = self.planner.generate_storyboard(seed, abstract, dce_plan, emotion_arc, full_story=full_story)
         storyboard = self._enforce_sentence_frame_lock(storyboard, full_story, seed)
         story_bible = build_story_bible(sample, seed, dce_plan, storyboard, full_story)
+        story_graph = build_story_graph(full_story, storyboard, seed, dce_plan)
         try:
             setattr(seed, '_story_bible', story_bible)
+            setattr(seed, '_story_graph', story_graph)
         except Exception:
             pass
         self._save_core_plan_outputs(out_dir, seed, abstract, full_story, dce_plan, emotion_arc, storyboard)
         try:
             _write_json(out_dir / 'story_bible.json', story_bible)
+            _write_json(out_dir / 'story_graph.json', story_graph)
         except Exception:
             pass
 

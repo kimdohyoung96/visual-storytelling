@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, List
@@ -30,12 +29,12 @@ def _jaccard(a, b):
 
 class DCEECausalMemoryStore:
     """
-    Story-faithful causal memory store.
+    Multi-history causal memory store.
 
-    Inspired by:
-    - ViSTA: salient history selection
-    - StoryGen / Make-A-Story: auto-regressive story memory
-    - DCEE: causal event/evidence memory specialized for narrative control
+    Improvements over a single-history selector:
+    - selects multiple relevant histories at once
+    - keeps entity/world continuity summaries
+    - exposes reference image paths from salient history to reduce auto-regressive drift
     """
 
     def __init__(self, max_items: int = 12):
@@ -56,29 +55,39 @@ class DCEECausalMemoryStore:
             'global_visual_symbols': getattr(seed, 'visual_symbols', {}),
         }
 
-    def _continuity_constraints(self, frame: Any) -> Dict[str, Any]:
+    def _continuity_constraints(self, frame: Any, selected: List[Dict[str, Any]]) -> Dict[str, Any]:
         protagonist = self.sink.get('protagonist', 'protagonist')
-        must_keep = list(getattr(frame, 'key_objects', []) or [])[:2] + list(getattr(frame, 'evidence_objects', []) or [])[:2]
+        must_keep = []
+        for m in selected:
+            must_keep.extend(m.get('key_objects', []) or [])
+        must_keep.extend(list(getattr(frame, 'key_objects', []) or [])[:3])
+        must_keep.extend(list(getattr(frame, 'evidence_objects', []) or [])[:3])
+        stable_scene = []
+        for m in selected:
+            loc = m.get('scene_location', '')
+            if loc:
+                stable_scene.append(loc)
         return {
             'same_protagonist': protagonist,
             'preserve_age_gender_face_hair_outfit': True,
-            'must_keep_objects_if_relevant': must_keep,
+            'must_keep_objects_if_relevant': list(dict.fromkeys([x for x in must_keep if x]))[:8],
             'target_emotion': getattr(frame, 'emotion', ''),
             'scene_location': getattr(frame, 'scene_location', ''),
             'weather': getattr(frame, 'weather', ''),
+            'stable_scene_memory': list(dict.fromkeys(stable_scene))[:3],
         }
 
     def _summarize_selected(self, selected: List[Dict[str, Any]]) -> str:
         if not selected:
             return 'No prior visual history. Introduce the first clear scene of the story.'
         parts = []
-        for m in selected[:3]:
+        for m in selected[:4]:
             parts.append(
-                f"frame {m.get('frame_id')}: event={m.get('event','')}; story={m.get('story_sentence','')}; emotion={m.get('emotion','')}; key_objects={m.get('key_objects',[])}"
+                f"frame {m.get('frame_id')}: story={m.get('story_sentence','')}; event={m.get('event','')}; emotion={m.get('emotion','')}; key_objects={m.get('key_objects',[])}"
             )
         return ' | '.join(parts)
 
-    def select(self, frame: Any, dce_plan: Any, emotion_arc: Any, strategy: str = 'adaptive_causal', top_k: int = 3) -> Dict[str, Any]:
+    def select(self, frame: Any, dce_plan: Any, emotion_arc: Any, strategy: str = 'adaptive_causal', top_k: int = 4) -> Dict[str, Any]:
         query = {
             'event': getattr(frame, 'event', ''),
             'story_sentence': getattr(frame, 'story_sentence', ''),
@@ -86,6 +95,7 @@ class DCEECausalMemoryStore:
             'event_grounding': getattr(frame, 'event_grounding', ''),
             'evidence': getattr(frame, 'emotion_evidence', []),
             'key_objects': getattr(frame, 'key_objects', []),
+            'must_show': getattr(frame, 'must_show', []),
             'scene_location': getattr(frame, 'scene_location', ''),
             'weather': getattr(frame, 'weather', ''),
             'conflict': getattr(dce_plan, 'conflict', ''),
@@ -95,24 +105,38 @@ class DCEECausalMemoryStore:
         for idx, item in enumerate(self.items):
             recency = (idx + 1) / total
             score = (
-                0.24 * _jaccard(query.get('story_sentence'), item.get('story_sentence'))
-                + 0.18 * _jaccard(query.get('event'), item.get('event'))
-                + 0.14 * _jaccard(query.get('event_grounding'), item.get('event_grounding'))
+                0.22 * _jaccard(query.get('story_sentence'), item.get('story_sentence'))
+                + 0.16 * _jaccard(query.get('event'), item.get('event'))
+                + 0.12 * _jaccard(query.get('event_grounding'), item.get('event_grounding'))
                 + 0.12 * _jaccard(query.get('evidence'), item.get('evidence'))
-                + 0.10 * _jaccard(query.get('key_objects'), item.get('key_objects'))
+                + 0.14 * _jaccard(query.get('key_objects'), item.get('key_objects'))
+                + 0.10 * _jaccard(query.get('must_show'), item.get('key_objects'))
                 + 0.08 * _jaccard(query.get('scene_location'), item.get('scene_location'))
-                + 0.06 * _jaccard(query.get('weather'), item.get('weather'))
+                + 0.02 * _jaccard(query.get('weather'), item.get('weather'))
                 + 0.04 * _jaccard(query.get('emotion'), item.get('emotion'))
-                + 0.04 * recency
+                + 0.10 * recency
             )
             scored.append((score, item))
         scored.sort(key=lambda x: x[0], reverse=True)
         selected = [dict(score=round(s, 4), **m) for s, m in scored[:top_k]]
+        ref_images = [m.get('image_path', '') for m in selected if m.get('image_path')]
+        entity_memory = []
+        world_memory = []
+        for m in selected:
+            entity_memory.extend(m.get('key_objects', []) or [])
+            if m.get('scene_location'):
+                world_memory.append(m.get('scene_location'))
+            if m.get('weather'):
+                world_memory.append(m.get('weather'))
         return {
             'causal_sink': self.sink,
             'selected_memories': selected,
             'salient_history': self._summarize_selected(selected),
-            'continuity_constraints': self._continuity_constraints(frame),
+            'multi_history_summary': self._summarize_selected(selected),
+            'continuity_constraints': self._continuity_constraints(frame, selected),
+            'entity_memory': list(dict.fromkeys([x for x in entity_memory if x]))[:12],
+            'world_memory': list(dict.fromkeys([x for x in world_memory if x]))[:8],
+            'reference_memory_images': ref_images[:3],
             'query': query,
         }
 
@@ -124,7 +148,7 @@ class DCEECausalMemoryStore:
             'event_grounding': getattr(frame, 'event_grounding', ''),
             'evidence': getattr(frame, 'emotion_evidence', []),
             'emotion': getattr(frame, 'emotion', ''),
-            'key_objects': getattr(frame, 'key_objects', []),
+            'key_objects': list(getattr(frame, 'key_objects', []) or []) + list(getattr(frame, 'evidence_objects', []) or []),
             'scene_location': getattr(frame, 'scene_location', ''),
             'weather': getattr(frame, 'weather', ''),
             'image_path': getattr(image, 'image_path', ''),
@@ -134,5 +158,5 @@ class DCEECausalMemoryStore:
         if len(self.items) > self.max_items:
             self.items = self.items[-self.max_items:]
 
-# Backward compatible alias.
+
 NarrativeMemoryStore = DCEECausalMemoryStore

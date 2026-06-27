@@ -217,7 +217,7 @@ All scores must be 0 to 1.
                 c.notes['vlm_error'] = vlm_scores['vlm_error']
 
             overall = (
-                0.08 * scores['image_quality'] + 0.02 * scores['colorfulness'] + 0.12 * scores['identity_consistency'] + 0.20 * scores['story_alignment'] + 0.16 * scores['event_alignment'] + 0.12 * scores['event_grounding'] + 0.12 * scores['evidence_visibility'] + 0.08 * scores['emotion_visibility'] + 0.05 * scores['emotion_cause_visibility'] + 0.03 * scores['scene_alignment'] + 0.02 * scores['continuity']
+                0.06 * scores['image_quality'] + 0.02 * scores['colorfulness'] + 0.14 * scores['identity_consistency'] + 0.22 * scores['story_alignment'] + 0.16 * scores['event_alignment'] + 0.12 * scores['event_grounding'] + 0.14 * scores['evidence_visibility'] + 0.08 * scores['emotion_visibility'] + 0.06 * scores['emotion_cause_visibility'] + 0.03 * scores['scene_alignment'] + 0.02 * scores['continuity']
             )
             if is_ending:
                 overall += 0.02 * scores['emotion_visibility']

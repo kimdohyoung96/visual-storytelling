@@ -23,6 +23,24 @@ def _load_rgb_image(path: str, size=(1024, 1024)):
     img.thumbnail(size)
     return img
 
+def _combine_reference_images(paths: List[str], size=(1024, 1024)):
+    valid = [str(p) for p in paths if _path_exists(p)]
+    if not valid:
+        return None, ''
+    imgs = [_load_rgb_image(p, size=(size[0] // max(1, min(3, len(valid))), size[1])) for p in valid[:3]]
+    if len(imgs) == 1:
+        return imgs[0], valid[0]
+    cols = len(imgs)
+    w = max(1, size[0] // cols)
+    canvas = Image.new('RGB', size, 'white')
+    for i, img in enumerate(imgs):
+        local = img.copy()
+        local.thumbnail((w - 8, size[1] - 8))
+        x0 = i * w + (w - local.width) // 2
+        y0 = (size[1] - local.height) // 2
+        canvas.paste(local, (x0, y0))
+    return canvas, ' | '.join(valid[:3])
+
 
 def _spec_from_packet(packet: VisualControlPacket) -> FrameVisualSpec:
     m = packet.control_metadata or {}
@@ -39,6 +57,8 @@ def _spec_from_packet(packet: VisualControlPacket) -> FrameVisualSpec:
             "visible_event": m.get("event_text", ""),
             "visible_cause": m.get("event_grounding", ""),
             "required_objects": m.get("must_show", []),
+            "carry_over_entities": [],
+            "recurring_entities": [],
             "forbidden_objects": ["generic portrait"],
             "location": "",
             "weather": "",
@@ -143,14 +163,22 @@ class SDXLButterflyCrossAttentionGenerator:
 
     def _reference_image_for_packet(self, packet):
         refs = getattr(packet, "reference_images", {}) or {}
-        path = refs.get("subject") or refs.get("source") or refs.get("input") or ""
-        if _path_exists(path):
-            return _load_rgb_image(path), str(path)
-        meta = packet.control_metadata or {}
-        path = meta.get("source_reference_image_path", "")
-        if _path_exists(path):
-            return _load_rgb_image(path), str(path)
-        return None, ""
+        paths = []
+        if refs.get('subject'):
+            paths.append(refs.get('subject'))
+        mem = refs.get('memory_sequence', []) or []
+        if isinstance(mem, str):
+            mem = [mem]
+        paths.extend(mem[:2])
+        if not paths:
+            meta = packet.control_metadata or {}
+            src = meta.get('source_reference_image_path', '')
+            if _path_exists(src):
+                paths.append(src)
+        img, desc = _combine_reference_images(paths, size=(1024, 1024))
+        if img is not None:
+            return img, desc
+        return None, ''
 
     @torch.no_grad()
     def generate_from_packet(
@@ -163,7 +191,7 @@ class SDXLButterflyCrossAttentionGenerator:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         spec = _spec_from_packet(packet)
-        modes = ["sentence_locked", "action", "objects", "background", "emotion"]
+        modes = ["sentence_locked", "object_locked", "continuity_locked", "background_locked", "emotion_locked"]
         reference_image, reference_path = self._reference_image_for_packet(packet)
 
         res = []
@@ -177,7 +205,9 @@ class SDXLButterflyCrossAttentionGenerator:
 
             kwargs = dict(
                 prompt=prompt,
+                prompt_2=prompt,
                 negative_prompt=negative_prompt,
+                negative_prompt_2=negative_prompt,
                 width=self.width,
                 height=self.height,
                 num_inference_steps=self.num_inference_steps,
