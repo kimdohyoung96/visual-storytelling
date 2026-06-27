@@ -179,7 +179,7 @@ class SDXLButterflyCrossAttentionGenerator:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         spec = _spec_from_packet(packet)
-        modes = ["sentence_locked", "object_locked", "continuity_locked", "background_locked", "emotion_locked"]
+        modes = ["event_locked", "evidence_locked", "emotion_causal_locked", "continuity_locked", "composition_locked"]
         reference_image, reference_path = self._reference_image_for_packet(packet)
 
         res = []

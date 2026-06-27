@@ -674,6 +674,9 @@ class DCEPlanner:
         data["atmosphere"] = _clean_text(data.get("atmosphere") or world_context.get("environment", ""))
         if not _clean_text(data.get("visible_cause")):
             data["visible_cause"] = _clean_text(data.get("action") or data.get("location") or "visible story evidence")
+        data["action_pose"] = _clean_text(data.get("action_pose") or data.get("action") or "body pose clearly shows the event")
+        data["camera_composition"] = _clean_text(data.get("camera_composition") or "single-scene medium shot centered on the protagonist and visible event")
+        data["absent_objects"] = _string_list(data.get("absent_objects", []))
 
         data["required_objects"] = _derive_required_objects(data, seed, protagonist)
         data["background_elements"] = _derive_background_elements(data, seed, protagonist)
@@ -714,7 +717,7 @@ class DCEPlanner:
             "visual_focus": step.get("action", ""),
             "key_objects": _string_list(step.get("required_objects")),
             "facial_cue": rule["face"],
-            "body_cue": rule["body"],
+            "body_cue": _clean_text(step.get("action_pose") or rule["body"]),
             "event_cue": step.get("visible_cause", ""),
             "scene_cue": step.get("location", ""),
             "cinematic_cue": rule["composition"],
@@ -744,14 +747,14 @@ class DCEPlanner:
             "source_image_path": getattr(seed, "source_image_path", ""),
             "emotion_visual_rule": emotion_rule_text(emotion),
             "shot_type": shot_type,
-            "camera_shot": shot_type,
+            "camera_shot": _clean_text(step.get("camera_composition") or shot_type),
             "camera_distance": choose_camera_distance(shot_type),
             "lighting_style": rule["lighting"],
             "color_palette": rule["palette"],
             "event_grounding_text": step.get("visible_cause", ""),
             "full_story_sentence": step.get("sentence", ""),
             "single_scene_only": True,
-            "must_not_show": getattr(seed, "forbidden_ungrounded_entities", []),
+            "must_not_show": _unique(getattr(seed, "forbidden_ungrounded_entities", []) + _string_list(step.get("absent_objects", []))),
         }
         for k, v in extra.items():
             try:

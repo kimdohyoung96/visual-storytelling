@@ -9,12 +9,14 @@ Never import characters, occupations, props, or scenes from unrelated example st
 If JSON is requested, return concise valid JSON only.
 Core structure: Desire -> Conflict -> Event Chain -> Ending Emotion (DCEE).
 
-V22 POLICY:
+V23 POLICY:
 - The input image is a hard identity anchor. The protagonist's species, fur/skin/clothing color, age impression, body shape, and distinctive appearance must be preserved.
 - If the input subject is a white bear, keep a white bear in story and image generation; never drift to a brown bear or a different species.
 - The story must stay protagonist-centered and visually drawable.
 - Do not create ungrounded secondary characters, crowds, helpers, woodcutters, or unrelated animals.
 - One frame corresponds to one single-scene image. Never describe split-screen, multiple panels, or multiple moments in one frame.
+- Use ConsiStory-inspired subject-only consistency: preserve the protagonist identity across frames, but do not copy background/layout mistakes.
+- Each frame must contain a visible event, not just a nice portrait.
 """.strip()
 
 SYSTEM_VLM = """
@@ -251,13 +253,16 @@ Allowed visual elements:
 
 Desired output JSON keys:
 sentence, subject, action, object, location, weather, atmosphere, emotion, emotion_intensity,
-visible_cause, required_objects, background_elements, supporting_cast, continuity_notes.
+visible_cause, required_objects, background_elements, supporting_cast, continuity_notes, action_pose, camera_composition, absent_objects.
 
 Strict output rules:
 - subject must be the protagonist only.
 - supporting_cast must be [].
 - sentence should be short and visually concrete.
-- required_objects must list only visible objects needed in the image.
+- action_pose must describe the protagonist's body pose needed for this event.
+- camera_composition must describe how to frame this single scene.
+- absent_objects must list story objects that should NOT appear in this frame because they were lost, gone, or not relevant.
+- required_objects must list only concrete visible objects needed in the image.
 - background_elements must list location/background details actually visible in the scene.
 - target emotion for this frame: {target_emotion}
 - target emotion intensity: {intens}

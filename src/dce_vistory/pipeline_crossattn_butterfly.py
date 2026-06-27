@@ -113,7 +113,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         self.evaluator = DCEQAEvaluator(
             self.llm,
             self.vlm,
-            use_vlm=bool(ev_cfg.get("use_vlm", False)),
+            use_vlm=bool(ev_cfg.get("use_vlm", True)),
             save_contact_sheet=bool(ev_cfg.get("save_contact_sheet", True)),
         )
 
@@ -177,20 +177,22 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             )
 
         packet.positive_prompt += (
-            "\n\nV21 STORY-IMAGE GROUNDING RULES:"
+            "\n\nV23 CONSISTORY-LITE STORY-IMAGE GROUNDING RULES:"
             f"\n- Render ONE single coherent scene only; never use split panels or multiple moments."
+            f"\n- ConsiStory-lite subject anchor: share only protagonist identity across frames; do not share background mistakes."\
             f"\n- Render the SAME protagonist identity: {identity_pos}"
             f"\n- Use the input image as a hard reference anchor. If the subject is {protagonist_short}, keep {protagonist_short} in this frame."
             f"\n- Exact story sentence to render: {getattr(frame, 'story_sentence', '')}"
             f"\n- Image-friendly rendering sentence: {getattr(frame, 'image_sentence', '')}"
-            f"\n- Exact event to show: {getattr(frame, 'event', '')}"
+            f"\n- Exact event to show, with action visibly readable: {getattr(frame, 'event', '')}"
             f"\n- Exact visible cause/evidence: {getattr(frame, 'event_grounding', '')}"
-            f"\n- Required visible objects only: {must_show}"
+            f"\n- Required visible objects only, no extra props: {must_show}"
             f"\n- Background/world that must remain grounded: {world_prompt}"
             f"\n- Emotion must be clearly readable: {getattr(frame, 'emotion', '')}; {getattr(frame, 'emotion_visual_rule', '')}"
             f"\n- Keep all required environment/background elements visible when relevant: {bg}"
             f"\n- Source input image path: {source_image_path}"
-            f"{prev_note}"
+            f"{prev_note}"\
+            f"\n- IMPORTANT: previous generated frames are text continuity only; do not copy any duplicate-subject artifact from them."
         )
         packet.negative_prompt += (
             "; split screen; diptych; triptych; comic panel; storyboard sheet; collage; multiple moments in one frame"
@@ -247,22 +249,24 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         generation_policy = {
-            "version": "V22",
-            "mode": "storylocked_candidate_selection_final",
+            "version": "V23",
+            "mode": "consistory_lite_event_grounded_candidate_selection",
             "protagonist_only": True,
             "single_scene_per_frame": True,
             "multiple_candidates_for_selection": True,
             "input_image_is_hard_identity_anchor": True,
             "story_sentence_locked": True,
             "previous_selected_frame_used_for_text_continuity": True,
+            "consistory_lite_subject_anchor": True,
+            "vlm_story_event_candidate_selector": True,
             "previous_generated_images_not_used_as_ip_reference_by_default": True,
             "allowed_visual_elements": [
                 "protagonist", "protagonist props", "grounded background objects", "weather", "lighting", "emotion cues"
             ],
             "blocked_story_entities": getattr(seed, "forbidden_ungrounded_entities", []),
-            "reason": "V21 strengthens image identity grounding, exact story-to-image alignment, and continuity from the previous selected frame."
+            "reason": "V23 uses ConsiStory-inspired subject-only anchors, stronger event-grounded prompts, and VLM-based candidate selection so story/action/evidence dominate image quality."
         }
-        _write_json(out_dir / "generation_policy_V22.json", generation_policy)
+        _write_json(out_dir / "generation_policy_V23.json", generation_policy)
         total_frames = int(sample.get("num_frames", 6))
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, total_frames)
 
@@ -409,7 +413,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "storyboard": str(out_dir / "storyboard.json"),
             "full_story": str(out_dir / "full_story.json"),
             "dcee_plan": str(out_dir / "dcee_plan.json"),
-            "generation_policy_V21": str(out_dir / "generation_policy_V22.json"),
+            "generation_policy_V23": str(out_dir / "generation_policy_V23.json"),
             "has_contact_sheet": (out_dir / "contact_sheet.png").exists(),
             "num_selected_images": len(selected_images),
         })
