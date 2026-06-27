@@ -82,7 +82,7 @@ class SDXLButterflyCrossAttentionGenerator:
         ip_adapter_repo="h94/IP-Adapter",
         ip_adapter_subfolder="sdxl_models",
         ip_adapter_weight_name="ip-adapter_sdxl.bin",
-        ip_adapter_scale=0.38,
+        ip_adapter_scale=0.28,
         use_butterfly_adapter=False,
     ):
         from diffusers import StableDiffusionXLPipeline

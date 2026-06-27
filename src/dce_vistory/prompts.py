@@ -140,8 +140,9 @@ STRICT IMAGE-FRIENDLY REQUIREMENTS:
   1) one subject,
   2) one visible action,
   3) one visible object,
-  4) one background/location,
-  5) one visible emotion cue.
+  4) one stable background/location,
+  5) one visible emotion cue through face/body.
+- Repeat stable background anchors when possible, such as bamboo forest, riverbank, flowing river, rocks, green leaves.
 - Do not use abstract/internal words such as honesty, integrity, realizes, understands, importance, moral, choice, fate, heart.
 - Convert abstract meaning into visible evidence.
   Bad: "the panda realizes honesty is important."
@@ -149,8 +150,9 @@ STRICT IMAGE-FRIENDLY REQUIREMENTS:
 - Avoid complex connectors: while, as, because, although, but, which, that.
 - Avoid multiple actions in one sentence.
 - If two characters appear, specify their positions clearly.
-- Keep the protagonist identity consistent.
-- The final sentence must be a clear ending image, not an abstract thought.
+- Keep the protagonist identity consistent. If the protagonist is a panda, write adult panda in every sentence, never cub/baby panda.
+- Use visible facial/body cues: wide eyes, smile, open mouth, tearful eyes, downturned mouth, slumped shoulders, empty paws.
+- The final sentence must be a clear ending image with visible loss evidence, not an abstract thought.
 """.strip()
 
 def dcee_branch_plan_prompt(seed: dict, abstract: str, num_candidates: int = 4) -> str:

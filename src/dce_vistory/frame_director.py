@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List
 import re
+from .story_bible import emotion_cue_from_bible, world_for_frame
 
 
 def clean(x: Any) -> str:
@@ -99,14 +100,17 @@ def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | 
         if sig:
             identity_parts.append("signature items: " + ", ".join(sig))
     subject_identity = "; ".join(identity_parts) or protagonist
+    if isinstance(story_bible, dict) and story_bible.get("subject_identity_prompt"):
+        subject_identity = story_bible.get("subject_identity_prompt") + "; " + subject_identity
 
     required_objects = unique(
         as_list(story_row.get("required_objects", []))
         + as_list(story_row.get("subject", ""))
         + as_list(story_row.get("object", ""))
         + as_list(getattr(frame, "key_objects", []))
-        + as_list(getattr(frame, "evidence_objects", [])),
-        8,
+        + as_list(getattr(frame, "evidence_objects", []))
+        + as_list(bible_world.get("stable_background", [])),
+        10,
     )
 
     emotion = clean(story_row.get("emotion")) or clean(getattr(frame, "emotion", ""))
@@ -141,15 +145,15 @@ def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | 
         visible_cause=event_grounding or story_sentence,
         required_objects=required_objects,
         forbidden_objects=_forbidden_for_subject(protagonist),
-        location=clean(story_row.get("location")) or clean(getattr(frame, "scene_location", "")) or clean(getattr(seed, "setting", "")),
-        weather=clean(getattr(frame, "weather", "")),
-        atmosphere=clean(getattr(frame, "atmosphere", "")),
+        location=bible_world.get("fixed_setting") or clean(story_row.get("location")) or clean(getattr(frame, "scene_location", "")) or clean(getattr(seed, "setting", "")),
+        weather=bible_world.get("weather") or clean(getattr(frame, "weather", "")),
+        atmosphere=bible_world.get("atmosphere") or clean(getattr(frame, "atmosphere", "")),
         emotion=emotion,
-        facial_expression=clean(story_row.get("facial_cue")) or clean(getattr(frame, "facial_cue", "")) or f"facial expression clearly showing {emotion}",
-        body_pose=clean(story_row.get("body_cue")) or clean(getattr(frame, "body_cue", "")) or f"body pose clearly showing {emotion} while doing the action",
+        facial_expression=bible_emotion.get("face") or clean(story_row.get("facial_cue")) or clean(getattr(frame, "facial_cue", "")) or f"facial expression clearly showing {emotion}",
+        body_pose=bible_emotion.get("body") or clean(story_row.get("body_cue")) or clean(getattr(frame, "body_cue", "")) or f"body pose clearly showing {emotion} while doing the action",
         camera=camera + (f"; visual focus: {visual_focus}" if visual_focus else ""),
         continuity=continuity,
-        negative=", ".join(_forbidden_for_subject(protagonist)),
+        negative=", ".join(unique(_forbidden_for_subject(protagonist) + as_list(story_bible.get("global_negative", [])), 50)),
     )
 
 
@@ -159,11 +163,14 @@ def prompt_from_spec(spec: FrameVisualSpec, mode: str = "sentence_locked") -> st
     common = (
         f"FRAME {spec.frame_id} OF {spec.total_frames}. "
         f"Create one full-color cinematic storybook illustration that visualizes exactly this sentence: \"{spec.story_sentence}\". "
-        f"Protagonist: {spec.protagonist}. Identity: {spec.subject_identity}. {spec.subject_reference_policy}. "
+        f"STRICT CHARACTER LOCK: {spec.subject_identity}. {spec.subject_reference_policy}. "
+        f"The protagonist must be the same ADULT character in every frame; never a baby, cub, child, or different subject. "
         f"Primary visible action: {spec.primary_action}. Visible event: {spec.visible_event}. "
         f"Visible cause of emotion: {spec.visible_cause}. Must show these objects clearly: {objects}. "
-        f"Location/background: {spec.location}. Weather: {spec.weather}. Atmosphere: {spec.atmosphere}. "
-        f"Emotion: {spec.emotion}; face: {spec.facial_expression}; body: {spec.body_pose}. "
+        f"STRICT WORLD LOCK: Location/background: {spec.location}. Weather: {spec.weather}. Atmosphere: {spec.atmosphere}. "
+        f"The background must visibly contain the riverbank/bamboo forest context when listed in required objects. "
+        f"STRICT EMOTION LOCK: Emotion: {spec.emotion}; face must show {spec.facial_expression}; body must show {spec.body_pose}. "
+        f"Use a medium shot or medium-close shot where the face, paws, action object, and background are all visible. "
         f"Camera/composition: {spec.camera}. Continuity: {spec.continuity}. "
         f"Do not draw: {forbidden}. "
     )
@@ -182,7 +189,7 @@ def prompt_from_spec(spec: FrameVisualSpec, mode: str = "sentence_locked") -> st
 
 def negative_from_spec(spec: FrameVisualSpec) -> str:
     return (
-        "generic portrait, repeated static pose, unrelated poster image, missing protagonist, wrong protagonist, "
+        "generic portrait, repeated static pose, unrelated poster image, missing protagonist, wrong protagonist, baby animal, cub, juvenile, childlike body, "
         "different identity, inconsistent character, missing action, missing event, missing evidence, missing required object, "
         "cropped out hands or props, wrong background, wrong weather, unrelated humans, duplicate characters, "
         + spec.negative

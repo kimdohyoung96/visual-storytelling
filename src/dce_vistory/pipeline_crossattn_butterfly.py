@@ -21,6 +21,7 @@ from .utils import save_json
 from .prompts import QUALITY_SUFFIX, NEGATIVE_PROMPT
 from .butterfly_adapter import ButterflyController
 from .sdxl_cross_attention_generator import SDXLButterflyCrossAttentionGenerator
+from .story_bible import build_story_bible
 
 
 def _safe_asdict(obj: Any):
@@ -132,7 +133,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             ip_adapter_repo=img_cfg.get('ip_adapter_repo', 'h94/IP-Adapter'),
             ip_adapter_subfolder=img_cfg.get('ip_adapter_subfolder', 'sdxl_models'),
             ip_adapter_weight_name=img_cfg.get('ip_adapter_weight_name', 'ip-adapter_sdxl.bin'),
-            ip_adapter_scale=float(img_cfg.get('ip_adapter_scale', 0.38)),
+            ip_adapter_scale=float(img_cfg.get('ip_adapter_scale', 0.28)),
             use_butterfly_adapter=bool(img_cfg.get('use_butterfly_adapter', False)),
         )
 
@@ -234,7 +235,16 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         full_story = self.planner.generate_full_story(seed, abstract, dce_plan, emotion_arc, int(sample.get('num_frames', 6)))
         storyboard = self.planner.generate_storyboard(seed, abstract, dce_plan, emotion_arc, full_story=full_story)
         storyboard = self._enforce_sentence_frame_lock(storyboard, full_story, seed)
+        story_bible = build_story_bible(sample, seed, dce_plan, storyboard, full_story)
+        try:
+            setattr(seed, '_story_bible', story_bible)
+        except Exception:
+            pass
         self._save_core_plan_outputs(out_dir, seed, abstract, full_story, dce_plan, emotion_arc, storyboard)
+        try:
+            _write_json(out_dir / 'story_bible.json', story_bible)
+        except Exception:
+            pass
 
         memory = DCEECausalMemoryStore()
         try:

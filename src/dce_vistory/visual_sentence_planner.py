@@ -136,16 +136,18 @@ HARD RULES:
 - Each sentence must be 8 to 16 words.
 - Each sentence must have exactly ONE visible action.
 - Each sentence must have exactly ONE clear location/background.
-- Each sentence must have exactly ONE visible emotion cue.
+- The location/background must repeat the stable story world when possible, e.g., bamboo forest, visible riverbank, flowing river.
+- Each sentence must have exactly ONE visible emotion cue, written as face/body evidence.
 - Do not write abstract/internal ideas: honesty, integrity, realizes, understands, importance, heart, fate, moral, choice.
 - Convert abstract meaning into visible objects/actions.
   Bad: "the panda realizes the importance of honesty"
   Good: "the panda kneels beside broken bamboo stumps in the rain"
 - Avoid multiple simultaneous actions in one sentence.
 - Avoid "while", "as", "because", "but", "although", "realizing", "understanding".
-- Keep the protagonist identity consistent.
+- Keep the protagonist identity consistent. If the protagonist is a panda, write adult panda, never cub/baby panda.
+- Give every frame a visible face cue and visible body cue.
 - If another character appears, state clear spatial roles:
   "woodcutter on the left raises axe; panda on the right watches".
-- For emotion, use visible face/body cues, not abstract words.
-- The final frame must be an ending image with visible cause of the target emotion.
+- For emotion, use visible face/body cues, not abstract words. Examples: wide eyes, downturned mouth, tearful eyes, slumped shoulders, empty paws.
+- The final frame must be an ending image with visible cause of the target emotion: empty paws, lost bamboo, riverbank, rain, lowered head.
 """.strip()
