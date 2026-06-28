@@ -90,6 +90,42 @@ def colorfulness_score(path: str) -> float:
         return 0.3
 
 
+def subject_visibility_score(path: str) -> float:
+    try:
+        img = Image.open(path).convert('L').resize((256, 256))
+        stat = ImageStat.Stat(img)
+        brightness = float(stat.mean[0]) / 255.0
+        contrast = float(stat.stddev[0]) / 255.0
+        # Prefer readable images, even when moody/dark.
+        brightness_term = 1.0 - min(1.0, abs(brightness - 0.48) / 0.48)
+        contrast_term = min(1.0, contrast / 0.22)
+        return round(float(0.55 * brightness_term + 0.45 * contrast_term), 4)
+    except Exception:
+        return 0.5
+
+
+def crop_penalty(path: str) -> float:
+    try:
+        img = Image.open(path).convert('L').resize((256, 256))
+        edges = img.filter(ImageFilter.FIND_EDGES)
+        arr = np.array(edges).astype(np.float32) / 255.0
+        h, w = arr.shape
+        band = max(6, int(min(h, w) * 0.08))
+        border = np.concatenate([arr[:band, :].ravel(), arr[-band:, :].ravel(), arr[:, :band].ravel(), arr[:, -band:].ravel()])
+        center = arr[band:-band, band:-band]
+        if center.size == 0:
+            return 0.15
+        border_activity = float(border.mean())
+        center_activity = float(center.mean())
+        if border_activity <= 0:
+            return 0.0
+        ratio = border_activity / max(1e-6, center_activity)
+        penalty = max(0.0, min(0.45, (ratio - 1.05) * 0.22))
+        return round(float(penalty), 4)
+    except Exception:
+        return 0.0
+
+
 def _make_contact_sheet_local(image_paths: List[str], out_path: Path, cols: int = 3, thumb_size=(384, 384)) -> str:
     valid = [Path(str(p)) for p in image_paths if p and Path(str(p)).exists()]
     if not valid:
@@ -232,7 +268,7 @@ Reject unrelated humans, extra animals, duplicate protagonist, generic portraits
 Return JSON only with keys:
 answers, qa_score, story_alignment, event_alignment, event_grounding, evidence_visibility,
 emotion_visibility, emotion_cause_visibility, scene_alignment, continuity,
-identity_consistency, colorfulness, extra_subject, duplicate_protagonist, caption_mismatch, reason.
+identity_consistency, colorfulness, subject_visibility, crop_penalty, extra_subject, duplicate_protagonist, caption_mismatch, reason.
 All scores must be 0 to 1.
 """.strip()
         try:
@@ -243,7 +279,7 @@ All scores must be 0 to 1.
     def rank_frame_candidates(self, frame, dce_plan, candidates, is_ending: bool = False):
         ranked = []
         for c in candidates:
-            scores = {'image_quality': image_quality_proxy(c.image_path), 'colorfulness': colorfulness_score(c.image_path), 'identity_consistency': 0.70, 'story_alignment': 0.60, 'event_alignment': 0.60, 'event_grounding': 0.60, 'evidence_visibility': 0.60, 'emotion_visibility': 0.64, 'emotion_cause_visibility': 0.60, 'scene_alignment': 0.60, 'continuity': 0.65, 'qa_score': 0.62, 'bad_extra_subject_penalty': 0.0}
+            scores = {'image_quality': image_quality_proxy(c.image_path), 'colorfulness': colorfulness_score(c.image_path), 'subject_visibility': subject_visibility_score(c.image_path), 'crop_penalty': crop_penalty(c.image_path), 'identity_consistency': 0.70, 'story_alignment': 0.60, 'event_alignment': 0.60, 'event_grounding': 0.60, 'evidence_visibility': 0.60, 'emotion_visibility': 0.64, 'emotion_cause_visibility': 0.60, 'scene_alignment': 0.60, 'continuity': 0.65, 'qa_score': 0.62, 'bad_extra_subject_penalty': 0.0}
 
             local_scores = self._local_caption_eval(frame, c)
             if local_scores:
@@ -265,6 +301,7 @@ All scores must be 0 to 1.
                 if bool(vlm_scores.get('extra_subject', False)) or bool(vlm_scores.get('duplicate_protagonist', False)):
                     scores['bad_extra_subject_penalty'] = max(scores.get('bad_extra_subject_penalty', 0.0), 0.75)
                     scores['identity_consistency'] = min(scores.get('identity_consistency', 0.70), 0.25)
+                    scores['crop_penalty'] = max(scores.get('crop_penalty', 0.0), 0.20)
                     scores['story_alignment'] = min(scores.get('story_alignment', 0.60), 0.35)
                 if bool(vlm_scores.get('caption_mismatch', False)):
                     scores['story_alignment'] = min(scores.get('story_alignment', 0.60), 0.35)
@@ -274,13 +311,13 @@ All scores must be 0 to 1.
                 c.notes['vlm_error'] = vlm_scores['vlm_error']
 
             overall = (
-                0.030 * scores['image_quality'] + 0.010 * scores['colorfulness'] + 0.140 * scores['identity_consistency'] + 0.300 * scores['story_alignment'] + 0.180 * scores['event_alignment'] + 0.145 * scores['event_grounding'] + 0.170 * scores['evidence_visibility'] + 0.060 * scores['emotion_visibility'] + 0.035 * scores['emotion_cause_visibility'] + 0.020 * scores['scene_alignment'] + 0.010 * scores['continuity'] - scores.get('bad_extra_subject_penalty', 0.0)
+                0.025 * scores['image_quality'] + 0.010 * scores['colorfulness'] + 0.080 * scores['subject_visibility'] - 0.060 * scores['crop_penalty'] + 0.150 * scores['identity_consistency'] + 0.305 * scores['story_alignment'] + 0.170 * scores['event_alignment'] + 0.150 * scores['event_grounding'] + 0.165 * scores['evidence_visibility'] + 0.055 * scores['emotion_visibility'] + 0.030 * scores['emotion_cause_visibility'] + 0.020 * scores['scene_alignment'] + 0.015 * scores['continuity'] - scores.get('bad_extra_subject_penalty', 0.0)
             )
             if is_ending:
                 overall += 0.02 * scores['emotion_visibility']
             scores['overall'] = round(float(overall), 4)
             c.scores.update(scores)
-            c.notes['v30_selection_reason'] = {'caption_is_primary_contract': True, 'extra_subject_penalty': scores.get('bad_extra_subject_penalty', 0.0), 'story_event_evidence_first': True, 'single_protagonist_priority': True}
+            c.notes['v31_selection_reason'] = {'caption_is_primary_contract': True, 'extra_subject_penalty': scores.get('bad_extra_subject_penalty', 0.0), 'story_event_evidence_first': True, 'single_protagonist_priority': True, 'subject_visibility_priority': True, 'crop_penalty': scores.get('crop_penalty', 0.0)}
             ranked.append(c)
         return sorted(ranked, key=lambda x: x.scores.get('overall', 0.0), reverse=True)
 
@@ -291,7 +328,7 @@ All scores must be 0 to 1.
         if not images:
             return {'warning': 'No images'}
         n = max(1, len(images))
-        keys = ['image_quality', 'colorfulness', 'identity_consistency', 'story_alignment', 'event_alignment', 'event_grounding', 'evidence_visibility', 'emotion_visibility', 'emotion_cause_visibility', 'scene_alignment', 'continuity', 'qa_score', 'overall']
+        keys = ['image_quality', 'colorfulness', 'subject_visibility', 'crop_penalty', 'identity_consistency', 'story_alignment', 'event_alignment', 'event_grounding', 'evidence_visibility', 'emotion_visibility', 'emotion_cause_visibility', 'scene_alignment', 'continuity', 'qa_score', 'overall']
         avg = {k: round(sum(float(getattr(img, 'scores', {}).get(k, 0.0)) for img in images) / n, 4) for k in keys}
         result = {'num_frames': len(images), 'averages': avg, 'selected_image_paths': [getattr(x, 'image_path', '') for x in images], 'questions': questions}
         if self.save_contact_sheet and out_dir:
