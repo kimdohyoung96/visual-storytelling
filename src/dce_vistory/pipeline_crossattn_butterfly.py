@@ -205,8 +205,8 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         generation_policy = {
-            "version": "V31",
-            "mode": "v31_story_aligned_subject_consistent_visibility_rescue",
+            "version": "V31.1",
+            "mode": "v31_1_prompt_audited_story_aligned_generation",
             "protagonist_only": True,
             "no_secondary_characters": True,
             "training_free_consistency_removed": True,
@@ -227,7 +227,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "blocked_story_entities": getattr(seed, "forbidden_ungrounded_entities", []),
             "reason": "V31 strengthens story-image alignment, protagonist consistency, and dark-scene readability while keeping the DCEE protagonist-only English caption pipeline."
         }
-        _write_json(out_dir / "generation_policy_V31.json", generation_policy)
+        _write_json(out_dir / "generation_policy_V31_1.json", generation_policy)
         total_frames = int(sample.get("num_frames", 6))
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, total_frames)
 
@@ -388,7 +388,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "storyboard": str(out_dir / "storyboard.json"),
             "full_story": str(out_dir / "full_story.json"),
             "dcee_plan": str(out_dir / "dcee_plan.json"),
-            "generation_policy_V31": str(out_dir / "generation_policy_V31.json"),
+            "generation_policy_V31_1": str(out_dir / "generation_policy_V31_1.json"),
             "has_contact_sheet": (out_dir / "contact_sheet.png").exists(),
             "num_selected_images": len(selected_images),
         })

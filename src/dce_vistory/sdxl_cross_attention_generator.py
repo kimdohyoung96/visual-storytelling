@@ -114,8 +114,79 @@ def _auto_fix_visibility(img: Image.Image) -> tuple[Image.Image, Dict[str, float
     }
 
 
+
+def _join_required_objects(items: List[str], limit: int = 6) -> str:
+    vals = []
+    for x in items or []:
+        s = str(x).strip()
+        if s and s not in vals:
+            vals.append(s)
+    return ", ".join(vals[:limit]) if vals else "only grounded story objects"
+
+
+def _compact_story_prompt(spec: FrameVisualSpec, mode: str = "caption_locked") -> str:
+    """Short SDXL-safe prompt.
+
+    SDXL's CLIP encoders use short context windows. Therefore, the current
+    caption/action/evidence must appear at the very front rather than after a
+    long story explanation.
+    """
+    required = _join_required_objects(spec.required_objects, 6)
+    caption = str(spec.story_sentence or "").strip()
+    action = str(spec.primary_action or spec.visible_event or "").strip()
+    evidence = str(spec.visible_cause or "").strip()
+    location = str(spec.location or "").strip()
+    emotion = str(spec.emotion or "").strip()
+    protagonist = str(spec.protagonist or "protagonist").strip()
+    identity = str(spec.subject_identity or "").strip()
+
+    mood_light = (
+        "moody background but readable protagonist, soft rim light, clear face and body"
+        if any(k in (emotion + " " + str(spec.atmosphere)).lower() for k in ["sad", "empty", "lonely", "dark", "night", "gloom", "melancholy"])
+        else "clear readable lighting"
+    )
+
+    mode_hint = {
+        "evidence_locked": "make the evidence object clearly visible",
+        "continuity_locked": "same protagonist identity, new current action",
+        "visibility_locked": "uncropped readable protagonist silhouette",
+        "emotion_locked": "emotion and its visible cause are clear",
+    }.get(mode, "match the exact caption")
+
+    parts = [
+        "professional full-color cinematic storybook illustration",
+        f"exact frame caption: {caption}",
+        f"exactly one protagonist only: {protagonist}",
+        f"same identity as reference: {identity}",
+        f"visible action: {action}",
+        f"visible evidence/cause: {evidence}",
+        f"required objects only: {required}",
+        f"location: {location}",
+        f"emotion: {emotion}",
+        "single coherent scene, medium-wide or full-body composition, uncropped face and limbs",
+        mood_light,
+        mode_hint,
+        "no humans, no extra animals, no duplicate protagonist, no unrelated props",
+    ]
+    return ". ".join([x for x in parts if x and not x.endswith(": ")])
+
+
+def _compact_negative_prompt(spec: FrameVisualSpec) -> str:
+    critical = (
+        "person, human, man, woman, child, boy, girl, people, crowd, helper, companion, "
+        "extra animal, second protagonist, duplicate protagonist, two bears, multiple bears, "
+        "unrelated prop, wrong event, missing action, missing evidence, generic portrait, "
+        "split screen, comic panel, collage, multiple scenes, cropped face, cropped feet, "
+        "cropped paws, cut off body, underexposed protagonist, unreadable face, blurry, watermark, text"
+    )
+    base = negative_from_spec(spec)
+    return critical + ", " + base
+
+
+
+
 class SDXLButterflyCrossAttentionGenerator:
-    """V31 story-faithful generator.
+    """V31.1 prompt-audited story-faithful generator.
 
     Improvements over V30:
     - stronger story-to-image alignment via caption/evidence prompt pair
@@ -297,20 +368,38 @@ class SDXLButterflyCrossAttentionGenerator:
             "combined_path": both_desc,
         }
 
-    def _build_prompt_pair(self, spec: FrameVisualSpec, mode: str) -> Tuple[str, str, str]:
-        main_prompt = prompt_from_spec(spec, mode)
-        compact_prompt_2 = (
-            f"frame {spec.frame_id}/{spec.total_frames}; current caption: {spec.story_sentence}; "
-            f"one protagonist only: {spec.protagonist}; "
-            f"current action: {spec.primary_action or spec.visible_event}; "
-            f"visible cause/evidence: {spec.visible_cause}; "
-            f"location: {spec.location}; weather: {spec.weather}; atmosphere: {spec.atmosphere}; emotion: {spec.emotion}; "
-            f"required visible objects: {', '.join(spec.required_objects[:8])}; "
-            f"identity continuity: {spec.subject_identity}; "
-            f"do not introduce other characters or duplicate the protagonist"
+    def _token_report(self, prompt: str, prompt_2: str, negative_prompt: str) -> Dict[str, Any]:
+        def rep(tok, txt):
+            try:
+                ids = tok(txt, truncation=False, add_special_tokens=True).input_ids
+                max_len = int(getattr(tok, "model_max_length", 77) or 77)
+                return {"tokens": len(ids), "max_length": max_len, "will_truncate": len(ids) > max_len}
+            except Exception as e:
+                return {"tokens": None, "max_length": None, "will_truncate": None, "error": str(e)[:200]}
+        out = {}
+        tok1 = getattr(self.pipe, "tokenizer", None)
+        tok2 = getattr(self.pipe, "tokenizer_2", None)
+        if tok1 is not None:
+            out["prompt_tokenizer_1"] = rep(tok1, prompt)
+            out["negative_tokenizer_1"] = rep(tok1, negative_prompt)
+        if tok2 is not None:
+            out["prompt_tokenizer_2"] = rep(tok2, prompt_2)
+            out["negative_tokenizer_2"] = rep(tok2, negative_prompt)
+        return out
+
+    def _build_prompt_pair(self, spec: FrameVisualSpec, mode: str) -> Tuple[str, str, str, Dict[str, Any]]:
+        # V31.1: use compact SDXL-safe prompts. The full frame_director prompt is kept
+        # out of the actual SDXL prompt because long prompts can be truncated by CLIP.
+        prompt = _compact_story_prompt(spec, mode)
+        prompt_2 = (
+            f"one protagonist only; current caption: {spec.story_sentence}; "
+            f"action: {spec.primary_action or spec.visible_event}; evidence: {spec.visible_cause}; "
+            f"location: {spec.location}; emotion: {spec.emotion}; required: {_join_required_objects(spec.required_objects, 6)}; "
+            f"no extra subjects"
         )
-        negative_prompt = negative_from_spec(spec)
-        return main_prompt, compact_prompt_2, negative_prompt
+        negative_prompt = _compact_negative_prompt(spec)
+        report = self._token_report(prompt, prompt_2, negative_prompt)
+        return prompt, prompt_2, negative_prompt, report
 
     def _apply_ip_adapter(self, pipe, image):
         if self.ip_adapter_loaded and image is not None:
@@ -394,7 +483,7 @@ class SDXLButterflyCrossAttentionGenerator:
         res = []
         for cid in range(num_candidates):
             mode = modes[cid % len(modes)]
-            prompt, prompt_2, negative_prompt = self._build_prompt_pair(spec, mode)
+            prompt, prompt_2, negative_prompt, token_report = self._build_prompt_pair(spec, mode)
             sd = self.seed + int(frame_id) * 1000 + cid
             gen = torch.Generator(device=self.device).manual_seed(sd) if self.device.startswith("cuda") else torch.Generator().manual_seed(sd)
 
@@ -439,7 +528,7 @@ class SDXLButterflyCrossAttentionGenerator:
                 },
                 notes={
                     "seed": sd,
-                    "generator_version": "V31",
+                    "generator_version": "V31.1",
                     "prompt_variant_mode": mode,
                     "generation_route": route,
                     "caption_locked_generation": True,
@@ -462,6 +551,7 @@ class SDXLButterflyCrossAttentionGenerator:
                     "frame_visual_spec": spec.to_dict(),
                     "prompt_2": prompt_2,
                     "negative_prompt": negative_prompt,
+                    "token_report": token_report,
                     **visibility_meta,
                 },
             ))
