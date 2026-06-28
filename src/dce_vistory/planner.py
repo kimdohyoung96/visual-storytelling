@@ -131,64 +131,6 @@ def _contains_forbidden(blob: Any, forbidden_terms: List[str]) -> bool:
     return any(term.lower() in text for term in forbidden_terms)
 
 
-_NEGATIVE_FIELD_NAMES = {
-    "absent_objects",
-    "forbidden_visuals",
-    "must_not_show",
-    "negative_prompt",
-    "negative_identity_prompt",
-    "forbidden_ungrounded_entities",
-}
-
-
-_POSITIVE_STORY_FIELD_NAMES = {
-    "sentence",
-    "image_sentence",
-    "image_sentence_en",
-    "subject",
-    "action",
-    "action_en",
-    "action_pose",
-    "action_pose_en",
-    "object",
-    "location",
-    "location_en",
-    "weather",
-    "atmosphere",
-    "emotion",
-    "visible_cause",
-    "visible_cause_en",
-    "state_before",
-    "state_after",
-    "required_objects",
-    "required_objects_en",
-    "background_elements",
-    "background_elements_en",
-    "supporting_cast",
-    "continuity_notes",
-    "camera_composition_en",
-    "characters", "objects", "setting", "mood", "world_context", "character_profiles",
-    "protagonist", "desire", "fear", "misbelief", "obstacle", "conflict", "event_chain", "event_spine", "turning_point", "ending_state", "moral_or_theme",
-}
-
-
-def _positive_story_blob(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Only fields that will actually be rendered in the story/image.
-
-    V24 prompts ask the LLM to fill `absent_objects` and `forbidden_visuals`.
-    Those fields intentionally contain words like "human", "extra character", or "second bear".
-    They must NOT trigger the forbidden-agent validator because they are negative constraints,
-    not positive story content.
-    """
-    if not isinstance(data, dict):
-        return {}
-    return {k: v for k, v in data.items() if k in _POSITIVE_STORY_FIELD_NAMES and k not in _NEGATIVE_FIELD_NAMES}
-
-
-def _contains_forbidden_positive_story(data: Dict[str, Any], forbidden_terms: List[str]) -> bool:
-    return _contains_forbidden(_positive_story_blob(data), forbidden_terms)
-
-
 def _replace_forbidden_text(text: str, forbidden_terms: List[str], protagonist: str) -> str:
     out = str(text or "")
     for term in forbidden_terms:
@@ -274,42 +216,6 @@ def _force_protagonist_only_step(data: Dict[str, Any], protagonist: str) -> Dict
 
 
 
-
-
-_ABSTRACT_CAUSE_WORDS = {
-    "desire", "fear", "loss", "journey", "emotion", "feeling", "feelings", "reflection", "reflects",
-    "bittersweet", "nature", "heavy heart", "honesty", "importance", "disappointment", "acceptance",
-    "the desire", "the fear", "the loss", "the need", "cause", "evidence"
-}
-
-
-def _is_abstract_or_clause(text: Any) -> bool:
-    s = _clean_text(text).lower()
-    if not s:
-        return True
-    if len(s.split()) > 4:
-        return True
-    return any(w in s for w in _ABSTRACT_CAUSE_WORDS)
-
-
-def _visual_inventory_items(items: Any, protagonist: str, limit: int = 6) -> List[str]:
-    out: List[str] = []
-    for item in _string_list(items):
-        item = _clean_text(item)
-        low = item.lower()
-        if not item:
-            continue
-        if low == _clean_text(protagonist).lower():
-            out.append(item)
-            continue
-        if _is_agent_like(item, protagonist):
-            continue
-        if _is_abstract_or_clause(item):
-            continue
-        if item not in out:
-            out.append(item)
-    return out[:limit]
-
 def _extract_seed_visual_terms(seed: Any, limit: int = 8) -> List[str]:
     """Collect grounded props/background terms from seed without adding new agents."""
     terms: List[str] = []
@@ -328,35 +234,45 @@ def _extract_seed_visual_terms(seed: Any, limit: int = 8) -> List[str]:
 
 def _derive_required_objects(data: Dict[str, Any], seed: Any, protagonist: str) -> List[str]:
     """
-    V22 story-locked required object repair.
-    Only keep concrete visual inventory. Do not convert abstract emotional causes
-    like "loss of the jar" into visible required objects.
+    V20 story-locked repair:
+    reconstruct only the minimum grounded set of props/background objects needed for the current sentence.
     """
-    items: List[str] = []
-    items.insert(0, protagonist)
-    items.extend(_string_list(data.get("object", "")))
-    items.extend(_string_list(data.get("required_objects", [])))
-    items.extend(_string_list(data.get("location", "")))
-    items.extend(_string_list(data.get("background_elements", []))[:3])
-    cleaned = _visual_inventory_items(items, protagonist, limit=7)
+    cleaned = _story_locked_visual_inventory(data, seed, protagonist)
     if not cleaned:
-        cleaned = [protagonist, "simple grounded background"]
-    return cleaned[:7]
+        cleaned = ["simple background"]
+    return cleaned[:4]
 
 
 def _derive_background_elements(data: Dict[str, Any], seed: Any, protagonist: str) -> List[str]:
     items: List[str] = []
     items.extend(_string_list(data.get("location", "")))
-    items.extend(_string_list(data.get("background_elements", []))[:3])
-    cleaned = _visual_inventory_items(items, protagonist, limit=4)
-    cleaned = [x for x in cleaned if _clean_text(x).lower() != _clean_text(protagonist).lower()]
-    if not cleaned:
-        wc = getattr(seed, "world_context", {}) or {}
-        if isinstance(wc, dict):
-            cleaned = _visual_inventory_items([wc.get("setting", ""), wc.get("weather", ""), wc.get("environment", "")], protagonist, limit=3)
+    items.extend(_string_list(data.get("background_elements", []))[:2])
+    if not items:
+        items.extend(_extract_seed_visual_terms(seed, limit=2))
+    cleaned = _filter_protagonist_only_objects(items, protagonist)
+    cleaned = [x for x in _unique(cleaned) if _clean_text(x) and x != protagonist]
     if not cleaned:
         cleaned = ["simple grounded background"]
-    return cleaned[:4]
+    return cleaned[:3]
+
+
+def _story_locked_visual_inventory(data: Dict[str, Any], seed: Any, protagonist: str) -> List[str]:
+    """Return the smallest grounded set of visual items needed for the current caption."""
+    items: List[str] = []
+    items.extend(_string_list(data.get("required_objects", [])))
+    items.extend(_string_list(data.get("required_objects_en", [])))
+    items.extend(_string_list(data.get("object", "")))
+    items.extend(_string_list(data.get("location", "")))
+    items.extend(_string_list(data.get("location_en", "")))
+    items.extend(_string_list(data.get("background_elements", []))[:3])
+    items.extend(_string_list(data.get("background_elements_en", []))[:3])
+    items.extend(_string_list(data.get("visible_cause", ""))[:1])
+    items.extend(_string_list(data.get("visible_cause_en", ""))[:1])
+    if len([x for x in items if _clean_text(x)]) < 2:
+        items.extend(_extract_seed_visual_terms(seed, limit=3))
+    cleaned = _filter_protagonist_only_objects(items, protagonist)
+    cleaned = [x for x in _unique(cleaned) if _clean_text(x) and _clean_text(x).lower() != _clean_text(protagonist).lower()]
+    return cleaned[:6]
 
 
 def _grounded_terms(sample: Dict[str, Any], image_summary: ImageUnderstanding | None) -> List[str]:
@@ -382,147 +298,35 @@ def _forbidden_terms(sample: Dict[str, Any], image_summary: ImageUnderstanding |
     return banned
 
 
-
-_COLOR_WORDS = ["white", "brown", "black", "gray", "grey", "golden", "red", "orange", "cream", "beige", "blue", "pink"]
-_SPECIES_WORDS = ["bear", "panda", "rabbit", "bunny", "fox", "deer", "dog", "cat", "wolf", "tiger", "bird", "monkey"]
-
-
-def _first_match(texts: List[str], vocab: List[str]) -> str:
-    joined = " ".join([_clean_text(x).lower() for x in texts if _clean_text(x)])
-    for token in vocab:
-        if re.search(rf"\b{re.escape(token)}\b", joined):
-            return token
-    return ""
-
-
-def _identity_grounding(sample: Dict[str, Any], image_summary: ImageUnderstanding | None) -> Dict[str, str]:
-    texts: List[str] = []
-    for key in ["protagonist", "text_prompt", "appearance", "protagonist_description", "species", "animal_type", "protagonist_species", "fur_color", "protagonist_color", "age_group", "gender", "outfit"]:
-        texts.extend(_string_list(sample.get(key)))
-    if image_summary is not None:
-        for key in ["caption", "protagonist_description", "protagonist_species", "protagonist_color", "coat_pattern", "age_group", "body_shape", "distinguishing_traits"]:
-            texts.extend(_string_list(getattr(image_summary, key, "")))
-    species = _clean_text(sample.get("protagonist_species") or sample.get("species") or _first_match(texts, _SPECIES_WORDS))
-    color = _clean_text(sample.get("protagonist_color") or sample.get("fur_color") or _first_match(texts, _COLOR_WORDS))
-    age_group = _clean_text(sample.get("age_group") or (getattr(image_summary, "age_group", "") if image_summary is not None else "")) or "unspecified"
-    gender = _clean_text(sample.get("gender", "")) or "unspecified"
-    outfit = _clean_text(sample.get("outfit", "")) or "same main outfit and same colors in every frame"
-    desc = " ".join([_clean_text(getattr(image_summary, "protagonist_description", "")) if image_summary is not None else "", _clean_text(sample.get("appearance", "")), _clean_text(sample.get("text_prompt", ""))]).strip()
-    body = _clean_text(sample.get("body", "")) or _clean_text(getattr(image_summary, "body_shape", "") if image_summary is not None else "")
-    marks = _clean_text(sample.get("distinguishing_traits", "")) or _clean_text(getattr(image_summary, "distinguishing_traits", "") if image_summary is not None else "") or _clean_text(getattr(image_summary, "coat_pattern", "") if image_summary is not None else "")
-    return {
-        "species": species,
-        "color": color,
-        "age_group": age_group,
-        "gender": gender,
-        "outfit": outfit,
-        "body": body,
-        "marks": marks,
-        "description": desc,
-    }
-
-
-def _wrong_color_terms(color: str) -> List[str]:
-    c = (color or "").lower().strip()
-    if not c:
-        return []
-    mapping = {
-        "white": ["brown fur", "tan fur", "black fur", "gray fur", "grey fur"],
-        "brown": ["white fur", "black fur", "gray fur", "grey fur"],
-        "black": ["white fur", "brown fur", "gray fur", "grey fur"],
-        "gray": ["white fur", "brown fur", "black fur"],
-        "grey": ["white fur", "brown fur", "black fur"],
-        "golden": ["white fur", "brown fur", "black fur"],
-    }
-    return mapping.get(c, [])
-
-
-def _normalize_world_context(data: Dict[str, Any], image_summary: ImageUnderstanding | None) -> Dict[str, Any]:
-    wc = data.get("world_context", {}) or {}
-    if not isinstance(wc, dict):
-        wc = {"setting": _clean_text(data.get("setting", ""))}
-    if image_summary is not None:
-        wc.setdefault("weather", _clean_text(getattr(image_summary, "weather", "")))
-        wc.setdefault("time_of_day", _clean_text(getattr(image_summary, "time_of_day", "")))
-        wc.setdefault("environment", _clean_text(getattr(image_summary, "environment_details", "")))
-        bg = _string_list(getattr(image_summary, "background_objects", []))
-        if bg:
-            wc.setdefault("background_objects", bg)
-    wc.setdefault("setting", _clean_text(data.get("setting", "")))
-    return wc
-
-
-def _simple_visual_sentence(protagonist: str, action: str, location: str, emotion: str, props: List[str], weather: str = "") -> str:
-    action = _clean_text(action) or "stands"
-    location = _clean_text(location) or "the scene"
-    weather = _clean_text(weather)
-    props = [p for p in _string_list(props) if _clean_text(p) and _clean_text(p).lower() != _clean_text(protagonist).lower()]
-    prop_phrase = ""
-    if props:
-        prop_phrase = " with " + " and ".join(props[:2])
-    weather_phrase = f" under {weather}" if weather else ""
-    emotion_phrase = f", showing {emotion}" if _clean_text(emotion) else ""
-    if action.lower().startswith(_clean_text(protagonist).lower()):
-        core = f"{action}{prop_phrase} in {location}{weather_phrase}{emotion_phrase}."
-    else:
-        core = f"{protagonist} {action}{prop_phrase} in {location}{weather_phrase}{emotion_phrase}."
-    return _clean_text(core)
-
-
-def _ensure_identity_fields(sample: Dict[str, Any], profile: Dict[str, Any], image_summary: ImageUnderstanding | None = None) -> Dict[str, Any]:
+def _ensure_identity_fields(sample: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Any]:
     profile = dict(profile or {})
     protagonist = sample.get("protagonist", profile.get("name", "protagonist"))
-    ident = _identity_grounding(sample, image_summary)
-    age_group = ident["age_group"]
-    gender = ident["gender"]
-    outfit = ident["outfit"]
-    species = ident["species"]
-    color = ident["color"]
-    marks = ident["marks"]
-    body = ident["body"] or "same body proportions in every frame"
-    desc = ident["description"]
-    species_color = " ".join([x for x in [color, species] if x]).strip()
-
+    age_group = sample.get("age_group", profile.get("age_group", "unspecified"))
+    gender = sample.get("gender", profile.get("gender", "unspecified"))
+    outfit = sample.get("outfit", profile.get("outfit", "same main outfit and same colors in every frame"))
     profile.setdefault("name", protagonist)
     profile.setdefault("role", "protagonist")
     profile.setdefault("age_group", age_group)
     profile.setdefault("gender", gender)
     profile.setdefault("outfit", outfit)
-    profile.setdefault("species", species)
-    profile.setdefault("fur_color", color)
-    profile.setdefault("distinguishing_traits", marks)
     profile.setdefault("signature_items", sample.get("signature_items", []))
-    profile.setdefault("face", sample.get("face", desc or f"consistent recognizable {age_group} protagonist face"))
-    profile.setdefault("hair", sample.get("hair", "same hair or same fur texture and pattern in every frame"))
-    profile.setdefault("body", sample.get("body", body))
-    profile.setdefault("color_palette", sample.get("protagonist_color_palette", color or "stable protagonist color palette"))
-    identity_bits = [
-        f"{profile['name']} is the SAME protagonist in every frame",
-        f"same age group ({age_group})",
-        f"same gender presentation ({gender})",
-    ]
-    if species:
-        identity_bits.append(f"same species ({species})")
-    if color:
-        identity_bits.append(f"same visible color ({color})")
-    if marks:
-        identity_bits.append(f"same distinguishing traits ({marks})")
-    identity_bits.extend([
-        f"same face ({profile['face']})",
-        f"same body ({profile['body']})",
-        f"same outfit ({outfit})",
-        f"same signature items ({profile.get('signature_items', [])})",
-        "only facial expression, body pose, background, weather, and action may change",
-    ])
-    profile.setdefault("identity_anchor_prompt", "; ".join(identity_bits) + ".")
-    negative_identity = [
-        "different person", "different animal", "different species", "duplicate protagonist", "extra character",
-        "child version", "baby version", "older version", "gender changed", "different face", "different body shape", "different outfit",
-    ] + _wrong_color_terms(color)
-    profile.setdefault("negative_identity_prompt", ", ".join(_unique(negative_identity)))
-    profile.setdefault("visual_short", species_color or protagonist)
+    profile.setdefault("face", sample.get("face", f"consistent recognizable {age_group} protagonist face"))
+    profile.setdefault("hair", sample.get("hair", "same head shape and same hair or fur pattern in every frame"))
+    profile.setdefault("body", sample.get("body", "same body proportions, same apparent age, same species in every frame"))
+    profile.setdefault("color_palette", sample.get("protagonist_color_palette", "stable protagonist color palette"))
+    profile.setdefault(
+        "identity_anchor_prompt",
+        (
+            f"{profile['name']} is the SAME protagonist in every frame; same age group ({age_group}), same gender presentation ({gender}), "
+            f"same face, same hair or fur pattern, same body proportions, same outfit ({outfit}), "
+            f"same signature items ({profile.get('signature_items', [])}). Only facial expression, body pose, background, and action may change."
+        ),
+    )
+    profile.setdefault(
+        "negative_identity_prompt",
+        "different person, different species, child version, baby version, older version, gender changed, different face, different hairstyle, different body shape, different outfit",
+    )
     return profile
-
 
 
 class DCEPlanner:
@@ -570,20 +374,19 @@ class DCEPlanner:
                     raise ValueError(f"missing key: {key}")
             if not _string_list(data.get("objects")):
                 raise ValueError("objects cannot be empty")
-            if _contains_forbidden_positive_story(data, forbidden) or _contains_forbidden_positive_story(data, list(_AGENT_WORDS)):
-                raise ValueError(f"contains forbidden ungrounded agents in positive seed fields: {forbidden}")
+            if _contains_forbidden(data, forbidden) or _contains_forbidden(data, list(_AGENT_WORDS)):
+                raise ValueError(f"contains forbidden ungrounded agents: {forbidden}")
 
         data = self._llm_json_strict(prompt, "build_seed", max_tokens=1200, validate=_validate, repair_hint="Use only grounded entities from the input/image summary.")
         protagonist = sample.get("protagonist", "protagonist")
         data = _sanitize_nested(data, forbidden + list(_AGENT_WORDS), protagonist)
-        data["world_context"] = _normalize_world_context(data, image_summary)
         data["characters"] = [protagonist]
         data["objects"] = _filter_protagonist_only_objects(data.get("objects", []), protagonist)
 
         profiles = data.get("character_profiles", []) or []
         if not profiles:
             profiles = [{"name": protagonist, "role": "protagonist"}]
-        profile_dicts = [_ensure_identity_fields(sample, p if isinstance(p, dict) else {"name": protagonist}, image_summary) for p in profiles]
+        profile_dicts = [_ensure_identity_fields(sample, p if isinstance(p, dict) else {"name": protagonist}) for p in profiles]
         try:
             character_profiles = [_safe_make(CharacterProfile, p) for p in profile_dicts]
         except Exception:
@@ -604,15 +407,11 @@ class DCEPlanner:
             raw_input=sample,
         )
         seed = _safe_make(StorySeed, kwargs)
-        main_profile = profile_dicts[0] if profile_dicts else {}
         for extra_key, extra_val in {
             "world_context": data.get("world_context", {}),
             "character_profiles": character_profiles,
             "source_image_path": sample.get("image_path", ""),
             "forbidden_ungrounded_entities": forbidden,
-            "protagonist_visual_short": main_profile.get("visual_short", protagonist),
-            "protagonist_identity_prompt": main_profile.get("identity_anchor_prompt", ""),
-            "protagonist_negative_identity_prompt": main_profile.get("negative_identity_prompt", ""),
         }.items():
             try:
                 setattr(seed, extra_key, extra_val)
@@ -639,8 +438,8 @@ class DCEPlanner:
             ev = data.get("event_chain", data.get("event_spine", []))
             if not ev:
                 raise ValueError("event_chain is empty")
-            if _contains_forbidden_positive_story(data, forbidden) or _contains_forbidden_positive_story(data, list(_AGENT_WORDS)):
-                raise ValueError("plan contains forbidden ungrounded agents in positive plan fields")
+            if _contains_forbidden(data, forbidden) or _contains_forbidden(data, list(_AGENT_WORDS)):
+                raise ValueError("plan contains forbidden ungrounded agents")
 
         data = self._llm_json_strict(prompt, "generate_dce_plan", max_tokens=1200, validate=_validate, repair_hint="Return one grounded DCEE plan using only the seed entities.")
         protagonist = getattr(seed, "protagonist", "protagonist")
@@ -695,6 +494,7 @@ class DCEPlanner:
             "rationale": data.get("rationale", "Emotion grows along the visible event chain toward the target ending emotion."),
         })
 
+
     def generate_story_step(self, seed: StorySeed, abstract: str, dce_plan: DCEPlan, emotion_arc: EmotionArc, story_so_far: List[Dict[str, Any]], previous_frame: StoryboardFrame | None, frame_index: int, num_frames: int) -> Dict[str, Any]:
         forbidden = getattr(seed, "forbidden_ungrounded_entities", []) or []
         prev_dict = _to_dict(previous_frame) if previous_frame is not None else None
@@ -704,83 +504,39 @@ class DCEPlanner:
             for key in ["sentence", "action", "location", "emotion", "visible_cause"]:
                 if key not in data:
                     raise ValueError(f"missing key: {key}")
-            if "required_objects" not in data:
-                data["required_objects"] = []
-            if "background_elements" not in data:
-                data["background_elements"] = []
+            for key in ["required_objects", "background_elements", "required_objects_en", "background_elements_en"]:
+                if key not in data:
+                    data[key] = []
             if not _clean_text(data.get("sentence")):
                 raise ValueError("sentence is empty")
-            if _contains_forbidden_positive_story(data, forbidden) or _contains_forbidden_positive_story(data, list(_AGENT_WORDS)):
-                raise ValueError("story step contains forbidden ungrounded agents in positive story fields")
-            if not _string_list(data.get("required_objects")):
+            if _contains_forbidden(data, forbidden) or _contains_forbidden(data, list(_AGENT_WORDS)):
+                raise ValueError("story step contains forbidden ungrounded agents")
+            if not _string_list(data.get("required_objects")) and not _string_list(data.get("required_objects_en")):
                 data["required_objects"] = _derive_required_objects(data, seed, getattr(seed, "protagonist", "protagonist"))
 
-        data = self._llm_json_strict(prompt, f"generate_story_step_{frame_index+1}", max_tokens=700, validate=_validate, repair_hint="Make the sentence easy to draw, grounded, single-scene, and free of ungrounded entities.")
+        data = self._llm_json_strict(prompt, f"generate_story_step_{frame_index+1}", max_tokens=850, validate=_validate, repair_hint="Make the caption concrete, single-scene, protagonist-only, and directly drawable.")
         protagonist = getattr(seed, "protagonist", "protagonist")
-        # V24.1: sanitize positive story content, but keep negative constraints separately.
-        original_absent_objects = _string_list(data.get("absent_objects", []))
-        original_forbidden_visuals = _string_list(data.get("forbidden_visuals", []))
         data = _sanitize_nested(data, forbidden + list(_AGENT_WORDS), protagonist)
-        data["absent_objects"] = _unique(original_absent_objects)
-        data["forbidden_visuals"] = _unique(original_forbidden_visuals)
         data = _force_protagonist_only_step(data, protagonist)
+
+        data["frame_id"] = frame_index + 1
+        data["sentence"] = _clean_text(data.get("sentence"))
+        data["image_caption_en"] = _clean_text(data.get("image_caption_en") or data.get("image_sentence_en") or data.get("sentence"))
+        data["image_sentence"] = data["image_caption_en"]
+        data["action"] = _clean_text(data.get("action") or data.get("action_en") or data["sentence"])
+        data["visible_cause"] = _clean_text(data.get("visible_cause") or data.get("visible_cause_en") or data["action"])
+        data["location"] = _clean_text(data.get("location") or data.get("location_en") or getattr(seed, "setting", ""))
 
         states = getattr(emotion_arc, "states", []) or []
         intensities = getattr(emotion_arc, "intensities", []) or []
         data["emotion"] = _clean_text(data.get("emotion") or (states[frame_index] if frame_index < len(states) else ""))
         data["emotion_intensity"] = int(data.get("emotion_intensity") or (intensities[frame_index] if frame_index < len(intensities) else 3))
-        data["location"] = _clean_text(data.get("location") or getattr(seed, "setting", ""))
-        world_context = getattr(seed, "world_context", {}) or {}
-        if not isinstance(world_context, dict):
-            world_context = {}
-        data["weather"] = _clean_text(data.get("weather") or world_context.get("weather", ""))
-        data["atmosphere"] = _clean_text(data.get("atmosphere") or world_context.get("environment", ""))
-        if not _clean_text(data.get("visible_cause")):
-            data["visible_cause"] = _clean_text(data.get("action") or data.get("location") or "visible story evidence")
-        data["action_pose"] = _clean_text(data.get("action_pose") or data.get("action") or "body pose clearly shows the event")
-        data["camera_composition"] = _clean_text(data.get("camera_composition") or "single-scene medium shot centered on the protagonist and visible event")
-        data["absent_objects"] = _string_list(data.get("absent_objects", []))
 
-        # V24: prefer English image-specific fields for SDXL rendering.
-        if _clean_text(data.get("action_en")):
-            data["action"] = _clean_text(data.get("action_en"))
-        if _clean_text(data.get("location_en")):
-            data["location"] = _clean_text(data.get("location_en"))
-        if _clean_text(data.get("visible_cause_en")):
-            data["visible_cause"] = _clean_text(data.get("visible_cause_en"))
-        if _string_list(data.get("required_objects_en")):
-            data["required_objects"] = _string_list(data.get("required_objects_en"))
-        else:
-            data["required_objects"] = _derive_required_objects(data, seed, protagonist)
-        if _string_list(data.get("background_elements_en")):
-            data["background_elements"] = _string_list(data.get("background_elements_en"))
-        else:
-            data["background_elements"] = _derive_background_elements(data, seed, protagonist)
-
-        data["action_pose"] = _clean_text(data.get("action_pose_en") or data.get("action_pose") or data.get("action") or "body pose clearly shows the event")
-        data["camera_composition"] = _clean_text(data.get("camera_composition_en") or data.get("camera_composition") or "single-scene medium-wide full-body shot centered on the protagonist with safe margins and no cropping")
-        data["absent_objects"] = _string_list(data.get("absent_objects", []))
-        data["forbidden_visuals"] = _unique(_string_list(data.get("forbidden_visuals", [])) + ["duplicate protagonist", "second bear", "extra character", "split panel", "comic panel", "cropped head", "cropped face", "cropped feet", "cut off body", "out of frame"])
-
-        data["frame_id"] = frame_index + 1
-        data["sentence"] = _clean_text(data.get("sentence"))
-        if not data["sentence"]:
-            data["sentence"] = _simple_visual_sentence(protagonist, data.get("action", ""), data.get("location", ""), data.get("emotion", ""), data.get("required_objects", []), data.get("weather", ""))
-
-        if _clean_text(data.get("image_sentence_en")):
-            data["image_sentence"] = _clean_text(data.get("image_sentence_en"))
-        else:
-            data["image_sentence"] = _simple_visual_sentence(
-                getattr(seed, "protagonist_visual_short", protagonist),
-                data.get("action", ""),
-                data.get("location", ""),
-                data.get("emotion", ""),
-                data.get("required_objects", []),
-                data.get("weather", ""),
-            )
-
+        # V28: object list is caption-grounded and still filtered at code level.
         data["required_objects"] = _derive_required_objects(data, seed, protagonist)
         data["background_elements"] = _derive_background_elements(data, seed, protagonist)
+        data["supporting_cast"] = []
+        data["characters"] = [protagonist]
         return data
 
     def story_step_to_frame(self, seed: StorySeed, dce_plan: DCEPlan, emotion_arc: EmotionArc, step: Dict[str, Any], frame_index: int, num_frames: int) -> StoryboardFrame:
@@ -788,12 +544,9 @@ class DCEPlanner:
         rule = get_emotion_rule(emotion)
         nf = "ending resolution" if frame_index == num_frames - 1 else ("story opening" if frame_index == 0 else "causal event progression")
         shot_type = choose_shot_type(frame_index, num_frames, nf)
-        world_context = getattr(seed, "world_context", {}) or {}
-        if not isinstance(world_context, dict):
-            world_context = {}
         frame_dict = {
             "frame_id": frame_index + 1,
-            "caption": step.get("image_sentence", step.get("sentence", "")),
+            "caption": step.get("sentence", ""),
             "narrative_function": nf,
             "event": step.get("action", ""),
             "protagonist_state": step.get("emotion", ""),
@@ -804,50 +557,41 @@ class DCEPlanner:
             "visual_focus": step.get("action", ""),
             "key_objects": _string_list(step.get("required_objects")),
             "facial_cue": rule["face"],
-            "body_cue": _clean_text(step.get("action_pose") or rule["body"] or "full body pose clearly shows the current event"),
+            "body_cue": rule["body"],
             "event_cue": step.get("visible_cause", ""),
             "scene_cue": step.get("location", ""),
             "cinematic_cue": rule["composition"],
             "prompt": "",
         }
         frame = _safe_make(StoryboardFrame, frame_dict)
-        main_profile = (getattr(seed, "character_profiles", []) or [None])[0]
         extra = {
             "story_sentence": step.get("sentence", ""),
-            "image_sentence": step.get("image_sentence", step.get("sentence", "")),
+            "image_sentence": step.get("image_caption_en", step.get("image_sentence", step.get("sentence", ""))),
+            "image_caption_en": step.get("image_caption_en", step.get("image_sentence", step.get("sentence", ""))),
             "caption_ko": step.get("sentence", ""),
-            "caption_en": step.get("image_sentence", step.get("sentence", "")),
-            "step_action": step.get("action", ""),
-            "step_object": step.get("object", ""),
             "event_causal_role": "visible story event",
             "event_grounding": step.get("visible_cause", ""),
             "emotion_evidence": _string_list(step.get("required_objects"))[:4],
             "evidence_objects": _string_list(step.get("required_objects"))[:6],
-            "must_show": _derive_required_objects(step, seed, getattr(seed, "protagonist", "protagonist")),
+            "must_show": _unique(_story_locked_visual_inventory(step, seed, getattr(seed, "protagonist", "protagonist"))),
             "scene_location": step.get("location", ""),
-            "time_of_day": step.get("time_of_day", world_context.get("time_of_day", "")),
-            "weather": step.get("weather", world_context.get("weather", "")),
-            "atmosphere": step.get("atmosphere", world_context.get("environment", "")),
-            "environment_details": _string_list(step.get("background_elements")),
+            "time_of_day": step.get("time_of_day", ""),
+            "weather": step.get("weather", ""),
+            "atmosphere": step.get("atmosphere", ""),
+            "environment_details": _string_list(step.get("background_elements"))[:3],
             "supporting_cast": [],
             "scene_transition": _clean_text(step.get("continuity_notes", "")),
             "character_identity": getattr(seed, "protagonist", "protagonist"),
-            "character_reference_prompt": getattr(main_profile, "identity_anchor_prompt", getattr(seed, "protagonist_identity_prompt", "")),
-            "character_negative_prompt": getattr(main_profile, "negative_identity_prompt", getattr(seed, "protagonist_negative_identity_prompt", "")),
-            "identity_short": getattr(seed, "protagonist_visual_short", getattr(seed, "protagonist", "protagonist")),
-            "source_image_path": getattr(seed, "source_image_path", ""),
+            "character_reference_prompt": getattr((getattr(seed, "character_profiles", []) or [None])[0], "identity_anchor_prompt", ""),
             "emotion_visual_rule": emotion_rule_text(emotion),
             "shot_type": shot_type,
-            "camera_shot": _clean_text(step.get("camera_composition") or shot_type),
+            "camera_shot": shot_type,
             "camera_distance": choose_camera_distance(shot_type),
             "lighting_style": rule["lighting"],
             "color_palette": rule["palette"],
             "event_grounding_text": step.get("visible_cause", ""),
             "full_story_sentence": step.get("sentence", ""),
-            "previous_story_sentence": "",
-            "single_scene_only": True,
-            "dcee_stage": "frame-level DCEE event step",
-            "must_not_show": _unique(getattr(seed, "forbidden_ungrounded_entities", []) + _string_list(step.get("absent_objects", [])) + _string_list(step.get("forbidden_visuals", []))),
+            "caption_contract": step.get("image_caption_en", step.get("sentence", "")),
         }
         for k, v in extra.items():
             try:
