@@ -62,13 +62,6 @@ def _filter_visual_inventory(items: List[str], protagonist: str, limit: int = 10
     return out[:limit]
 
 
-def _mood_visibility_hint(emotion: str, atmosphere: str, weather: str) -> str:
-    mood = clean(' '.join([emotion, atmosphere, weather])).lower()
-    if any(k in mood for k in ['sad', 'sadness', 'empty', 'emptiness', 'lonely', 'loneliness', 'void', 'melancholy', 'dark', 'night', 'rain', 'gloom']):
-        return 'moody dark environment, but keep the protagonist clearly visible with readable face, clean silhouette, soft rim light, and enough front light to see expression and action'
-    return 'balanced readable lighting, clear silhouette, and visible face, limbs, and props'
-
-
 @dataclass
 class FrameVisualSpec:
     frame_id: int
@@ -110,7 +103,7 @@ def _forbidden_for_subject(protagonist: str) -> List[str]:
     base = [
         'text', 'watermark', 'logo', 'duplicate protagonist', 'unrelated extra people',
         'wrong age', 'wrong gender', 'child version', 'baby version', 'juvenile version',
-        'completely different outfit', 'generic portrait only', 'empty background', 'missing props', 'cropped feet', 'cropped face', 'cropped paws', 'cropped hands', 'cropped full body', 'extra character', 'second subject', 'tiny extra animal', 'tiny extra human', 'unreadable dark subject', 'underexposed protagonist'
+        'completely different outfit', 'generic portrait only', 'empty background', 'missing props', 'cropped feet', 'cropped face', 'cropped paws', 'extra character', 'second subject'
     ]
     if 'panda' in p or 'bear' in p:
         base += ['human protagonist', 'human face replacing panda', 'panda turning into human', 'human instead of panda', 'another bear', 'two bears', 'bear with person']
@@ -235,51 +228,26 @@ def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | 
 
 
 def prompt_from_spec(spec: FrameVisualSpec, mode: str = 'caption_locked') -> str:
-    obj = ', '.join(unique(spec.required_objects, 10)) or 'only grounded story objects'
-    carry = ', '.join(unique(spec.carry_over_entities, 5))
-    recurring = ', '.join(unique(spec.recurring_entities, 5))
-    identity = shorten(spec.subject_identity, 42)
-    sentence = shorten(spec.story_sentence, 48)
-    action = shorten(spec.primary_action or spec.visible_event, 24)
-    cause = shorten(spec.visible_cause, 24)
-    loc = shorten(spec.location, 18)
-    weather = shorten(spec.weather, 10) or 'story-appropriate weather'
-    atmosphere = shorten(spec.atmosphere, 12) or 'story-appropriate atmosphere'
-    face = shorten(spec.facial_expression, 16)
-    body = shorten(spec.body_pose, 18)
-    camera = shorten(spec.camera, 20)
-    visibility = _mood_visibility_hint(spec.emotion, spec.atmosphere, spec.weather)
+    obj = ', '.join(unique(spec.required_objects, 5)) or 'only grounded story objects'
+    sentence = shorten(spec.story_sentence, 28)
+    action = shorten(spec.primary_action or spec.visible_event, 10)
+    cause = shorten(spec.visible_cause, 10)
+    identity = shorten(spec.subject_identity, 14)
+    loc = shorten(spec.location, 8)
+    emotion = shorten(spec.emotion, 4)
 
-    base = (
-        f'professional full-color cinematic storybook illustration. '
-        f'visual storytelling frame {spec.frame_id} of {spec.total_frames}. '
-        f'caption-locked rendering: {sentence}. '
-        f'exactly one protagonist only: {spec.protagonist}. '
-        f'do not show any second person, second animal, duplicate protagonist, crowd, or helper. '
-        f'keep protagonist identity consistent across frames: {identity}. '
-        f'show a readable single scene with exactly one main moment from the current caption; not a generic portrait, not a collage, and not a repeated idle pose. '
-        f'the protagonist must be the central subject and visually dominant in the frame. '
-        f'show the protagonist full body or medium-wide when possible; face, limbs, and main prop must remain visible and uncropped. '
-        f'current visible action: {action}. visible cause or evidence: {cause}. '
-        f'only grounded visual elements may appear: {obj}. '
-        f'place/background: {loc}. weather: {weather}. atmosphere: {atmosphere}. '
-        f'emotion: {spec.emotion}. facial expression: {face}. body pose: {body}. '
-        f'lighting/readability: {visibility}. '
-        f'camera/composition: {camera}. '
-        f'render the current story event clearly and literally. '
+    return clean(
+        f"professional full-color storybook illustration. "
+        f"exact frame caption: {sentence}. "
+        f"exactly one protagonist only: {spec.protagonist}. "
+        f"same identity as reference: {identity}. "
+        f"visible action: {action}. "
+        f"visible evidence: {cause}. "
+        f"required objects: {obj}. "
+        f"location: {loc}. emotion: {emotion}. "
+        f"single coherent scene, medium-wide shot, uncropped face and limbs. "
+        f"no humans, no extra animals, no duplicate protagonist."
     )
-
-    if mode == 'evidence_locked':
-        extra = f'all listed required objects and visual evidence must be clearly visible in the same frame. show why the protagonist is doing the action. keep only these carry-over entities if still relevant: {carry}.'
-    elif mode == 'continuity_locked':
-        extra = f'preserve protagonist identity and world continuity, but the current caption and current action are more important than previous frames. recurring story entities allowed only if explicitly listed: {recurring}.'
-    elif mode == 'emotion_locked':
-        extra = f'the viewer must immediately understand why the protagonist feels {spec.emotion}; emotional cause and required evidence must be visible in the same scene.'
-    elif mode == 'visibility_locked':
-        extra = 'the protagonist must remain clearly readable even if the background is dark or moody; avoid underexposure, hide no limbs or face, and separate the protagonist from the background with clean lighting and silhouette.'
-    else:
-        extra = 'caption locking is mandatory: visualize this exact caption, not a generic portrait, not an unrelated moment, and not an earlier or later event.'
-    return clean(base + ' ' + extra)
 
 
 def negative_from_spec(spec: FrameVisualSpec) -> str:
@@ -288,7 +256,7 @@ def negative_from_spec(spec: FrameVisualSpec) -> str:
         'split screen, multi panel, collage, comic page, multiple scenes, generic portrait, repeated static pose, unrelated poster image, '
         'missing protagonist, wrong protagonist, baby animal, cub, juvenile, childlike body, '
         'different identity, inconsistent character, missing action, missing event, missing evidence, missing required object, cropped out props, cropped feet, cropped paws, cropped face, '
-        'wrong background, wrong weather, unrelated humans, person, man, woman, child, girl, boy, extra animal, duplicate characters, second protagonist, companion character, sidekick, tiny extra figure, '
-        'unrelated object, unrelated prop, text, watermark, low quality, blurry, underexposed subject, unreadable dark face, invisible eyes, severe crop, clipped body, '
+        'wrong background, wrong weather, unrelated humans, person, man, woman, child, girl, boy, extra animal, duplicate characters, second protagonist, companion character, sidekick, '
+        'unrelated object, unrelated prop, text, watermark, low quality, blurry, '
         + spec.negative
     )

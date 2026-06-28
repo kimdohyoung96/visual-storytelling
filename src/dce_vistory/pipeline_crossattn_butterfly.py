@@ -144,8 +144,8 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             device=img_cfg.get("device", "cuda"),
             width=int(img_cfg.get("width", 1024)),
             height=int(img_cfg.get("height", 1024)),
-            num_inference_steps=int(img_cfg.get("num_inference_steps", 44)),
-            guidance_scale=float(img_cfg.get("guidance_scale", 9.0)),
+            num_inference_steps=int(img_cfg.get("num_inference_steps", 36)),
+            guidance_scale=float(img_cfg.get("guidance_scale", 7.5)),
             seed=int(img_cfg.get("seed", 42)),
             adapter_ckpt=ad_cfg.get("adapter_ckpt"),
             enable_cpu_offload=bool(img_cfg.get("enable_cpu_offload", False)),
@@ -154,14 +154,15 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             emotion_tokens=int(ad_cfg.get("emotion_tokens", 8)),
             event_tokens=int(ad_cfg.get("event_tokens", 8)),
             evidence_tokens=int(ad_cfg.get("evidence_tokens", 8)),
-            use_refiner=bool(img_cfg.get("use_refiner", True)),
+            use_refiner=bool(img_cfg.get("use_refiner", False)),
             refiner_model_id=img_cfg.get("refiner_model_id", "stabilityai/stable-diffusion-xl-refiner-1.0"),
             refiner_strength=float(img_cfg.get("refiner_strength", 0.80)),
             aesthetic_score=float(img_cfg.get("aesthetic_score", 6.0)),
             negative_aesthetic_score=float(img_cfg.get("negative_aesthetic_score", 2.5)),
             quality_model_preset=img_cfg.get("quality_model_preset", "sdxl_base"),
-            use_previous_frame_img2img=bool(img_cfg.get("use_previous_frame_img2img", True)),
-            previous_frame_strength=float(img_cfg.get("previous_frame_strength", 0.40)),
+            use_ip_adapter=bool(img_cfg.get("use_ip_adapter", True)),
+            ip_adapter_scale=float(img_cfg.get("ip_adapter_scale", 0.26)),
+            use_previous_frame_img2img=False,
         )
 
     def _strengthen_packet(self, packet, frame):
@@ -175,7 +176,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "\n- Show exactly one protagonist only. No other human or animal may appear."
             "\n- Keep the same protagonist identity as previous frames."
             "\n- Show a single coherent story scene with uncropped face and limbs."
-            "\n- Use rich full color and a detailed but relevant background."
+            "\n- Use clean, stable shape and the same protagonist identity."
         )
         packet.negative_prompt += "; generic portrait, missing required objects, wrong protagonist identity, empty background, weak action, weak emotion, extra person, extra human, extra animal, second protagonist, duplicate protagonist, cropped body"
         return packet
@@ -205,13 +206,16 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         generation_policy = {
-            "version": "V31.1",
-            "mode": "v31_1_prompt_audited_story_aligned_generation",
+            "version": "V31.2-Lite",
+            "mode": "v31_2_lite_stable_caption_first_sdxl",
             "protagonist_only": True,
             "no_secondary_characters": True,
             "training_free_consistency_removed": True,
             "english_only_text_generation": True,
-            "sdxl_refiner_enabled": bool(self.cfg.get("image_generator", {}).get("use_refiner", True)),
+            "sdxl_refiner_enabled": False,
+            "previous_frame_img2img_enabled": False,
+            "prompt_length_guard": True,
+            "long_freeform_prompt_removed": True,
             "caption_is_image_contract": True,
             "multi_candidate_generation_restored": True,
             "cleanup_stale_candidates": True,
@@ -225,9 +229,9 @@ class CrossAttentionButterflyDCEViStoryPipeline:
                 "visible cause/evidence"
             ],
             "blocked_story_entities": getattr(seed, "forbidden_ungrounded_entities", []),
-            "reason": "V31 strengthens story-image alignment, protagonist consistency, and dark-scene readability while keeping the DCEE protagonist-only English caption pipeline."
+            "reason": "V31.2-Lite removes unstable V31 components, disables previous-frame img2img/refiner by default, and uses compact caption-first token-guarded SDXL prompts for better identity and image quality."
         }
-        _write_json(out_dir / "generation_policy_V31_1.json", generation_policy)
+        _write_json(out_dir / "generation_policy_V31_2_lite.json", generation_policy)
         total_frames = int(sample.get("num_frames", 6))
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, total_frames)
 
@@ -257,9 +261,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         color_threshold = float(pipe_cfg.get("colorfulness_threshold", 0.35))
         event_threshold = float(pipe_cfg.get("event_grounding_threshold", 0.72))
         evidence_threshold = float(pipe_cfg.get("evidence_visibility_threshold", 0.72))
-        story_threshold = float(pipe_cfg.get("story_alignment_threshold", 0.82))
-        visibility_threshold = float(pipe_cfg.get("subject_visibility_threshold", 0.58))
-        crop_penalty_threshold = float(pipe_cfg.get("crop_penalty_threshold", 0.14))
+        story_threshold = float(pipe_cfg.get("story_alignment_threshold", 0.78))
 
         style = sample.get("style", "full-color cinematic storybook illustration")
         if "color" not in style.lower():
@@ -311,8 +313,6 @@ class CrossAttentionButterflyDCEViStoryPipeline:
                 or best.scores.get("colorfulness", 0.0) < color_threshold
                 or best.scores.get("event_grounding", 0.0) < event_threshold
                 or best.scores.get("evidence_visibility", 0.0) < evidence_threshold
-                or best.scores.get("subject_visibility", 0.0) < visibility_threshold
-                or best.scores.get("crop_penalty", 0.0) > crop_penalty_threshold
                 or best.scores.get("bad_extra_subject_penalty", 0.0) > 0.18
             ):
                 retried = True
@@ -388,7 +388,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "storyboard": str(out_dir / "storyboard.json"),
             "full_story": str(out_dir / "full_story.json"),
             "dcee_plan": str(out_dir / "dcee_plan.json"),
-            "generation_policy_V31_1": str(out_dir / "generation_policy_V31_1.json"),
+            "generation_policy_V31_2_lite": str(out_dir / "generation_policy_V31_2_lite.json"),
             "has_contact_sheet": (out_dir / "contact_sheet.png").exists(),
             "num_selected_images": len(selected_images),
         })
