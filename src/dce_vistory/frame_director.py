@@ -77,10 +77,10 @@ def _forbidden_for_subject(protagonist: str) -> List[str]:
     base = [
         'text', 'watermark', 'logo', 'duplicate protagonist', 'unrelated extra people',
         'wrong age', 'wrong gender', 'child version', 'baby version', 'juvenile version',
-        'completely different outfit', 'generic portrait only', 'empty background', 'missing props'
+        'completely different outfit', 'generic portrait only', 'empty background', 'missing props', 'cropped feet', 'cropped face', 'cropped paws', 'extra character', 'second subject'
     ]
     if 'panda' in p or 'bear' in p:
-        base += ['human protagonist', 'human face replacing panda', 'panda turning into human', 'human instead of panda']
+        base += ['human protagonist', 'human face replacing panda', 'panda turning into human', 'human instead of panda', 'another bear', 'two bears', 'bear with person']
     if 'woodcutter' in p:
         base += ['panda protagonist', 'animal protagonist', 'different man']
     return base
@@ -208,49 +208,49 @@ def prompt_from_spec(spec: FrameVisualSpec, mode: str = 'caption_locked') -> str
     obj = ', '.join(unique(spec.required_objects, 10))
     carry = ', '.join(unique(spec.carry_over_entities, 5))
     recurring = ', '.join(unique(spec.recurring_entities, 5))
-    identity = shorten(spec.subject_identity, 34)
-    sentence = shorten(spec.story_sentence, 34)
-    action = shorten(spec.primary_action or spec.visible_event, 18)
-    cause = shorten(spec.visible_cause, 18)
-    loc = shorten(spec.location, 12)
-    weather = shorten(spec.weather, 6)
-    atmosphere = shorten(spec.atmosphere, 8)
-    face = shorten(spec.facial_expression, 12)
-    body = shorten(spec.body_pose, 14)
-    camera = shorten(spec.camera, 14)
+    identity = shorten(spec.subject_identity, 38)
+    sentence = shorten(spec.story_sentence, 42)
+    action = shorten(spec.primary_action or spec.visible_event, 20)
+    cause = shorten(spec.visible_cause, 20)
+    loc = shorten(spec.location, 16)
+    weather = shorten(spec.weather, 8)
+    atmosphere = shorten(spec.atmosphere, 10)
+    face = shorten(spec.facial_expression, 14)
+    body = shorten(spec.body_pose, 16)
+    camera = shorten(spec.camera, 18)
 
     base = (
         f'full-color cinematic storybook illustration. frame {spec.frame_id}/{spec.total_frames}. '
-        f'caption-locked generation: render this exact frame caption as one coherent scene. '
+        f'render one single coherent scene for this exact story frame. '
         f'exact frame caption: {sentence}. '
-        f'exactly one protagonist: {spec.protagonist}. no secondary characters. '
-        f'same protagonist identity: {identity}. '
+        f'exactly one visible protagonist only: {spec.protagonist}. no secondary characters, no companion, no helper, no other animal, no human. '
+        f'keep the same protagonist identity across all frames: {identity}. '
+        f'show the protagonist full-body or medium-wide when possible, with face, paws/feet, and main action clearly visible and uncropped. '
         f'main visible action: {action}. visible cause/evidence: {cause}. '
         f'only these required visual elements may appear: {obj}. '
         f'scene/location: {loc}; weather: {weather}; mood: {atmosphere}. '
-        f'emotion {spec.emotion}; face {face}; body {body}. camera {camera}. '
-        f'do not add unrelated objects, humans, animals, or extra props. '
+        f'emotion: {spec.emotion}; face: {face}; body: {body}. camera/composition: {camera}. '
+        f'no unrelated object, no multi-panel layout, no split scene, no poster-like portrait. '
     )
 
-    if mode == 'object_locked':
-        extra = f'all listed objects must be visible and readable. keep carry-over entities only if listed: {carry}. recurring entities: {recurring}.'
+    if mode == 'evidence_locked':
+        extra = f'all listed required objects and event evidence must be visible. show why the protagonist is doing the action. keep only these carry-over entities if still relevant: {carry}.'
     elif mode == 'continuity_locked':
-        extra = f'keep protagonist identity and world continuity, but the current caption and action are more important than previous frames.'
-    elif mode == 'background_locked':
-        extra = f'background must clearly show {loc}, {weather}, {atmosphere}, while still showing the current caption action.'
+        extra = f'keep protagonist identity and world continuity, but the current caption and current action are more important than previous frames. recurring story entities allowed only if listed: {recurring}.'
     elif mode == 'emotion_locked':
-        extra = f'the viewer must understand why the protagonist feels {spec.emotion}; emotion cause and required objects must be visible.'
+        extra = f'the viewer must immediately understand why the protagonist feels {spec.emotion}; the emotional cause and required objects must be visible in the same scene.'
     else:
-        extra = 'caption locking is mandatory: visualize this exact caption, not a generic portrait.'
+        extra = 'caption locking is mandatory: visualize this exact caption, not a generic portrait and not an unrelated moment.'
     return clean(base + ' ' + extra)
 
 
 def negative_from_spec(spec: FrameVisualSpec) -> str:
+
     return clean(
-        'split screen, multi panel, collage, multiple scenes, generic portrait, repeated static pose, unrelated poster image, '
+        'split screen, multi panel, collage, comic page, multiple scenes, generic portrait, repeated static pose, unrelated poster image, '
         'missing protagonist, wrong protagonist, baby animal, cub, juvenile, childlike body, '
-        'different identity, inconsistent character, missing action, missing event, missing evidence, missing required object, cropped out props, '
-        'wrong background, wrong weather, unrelated humans, person, man, woman, child, extra animal, duplicate characters, second protagonist, '
+        'different identity, inconsistent character, missing action, missing event, missing evidence, missing required object, cropped out props, cropped feet, cropped paws, cropped face, '
+        'wrong background, wrong weather, unrelated humans, person, man, woman, child, girl, boy, extra animal, duplicate characters, second protagonist, companion character, sidekick, '
         'unrelated object, unrelated prop, text, watermark, low quality, blurry, '
         + spec.negative
     )

@@ -26,6 +26,7 @@ _SPECIAL_STORY_TERMS = [
     "friend", "friends", "animal friend", "animal friends", "wild animal friend", "wild animal friends",
     "helper", "helpers", "villager", "villagers", "human", "hunter", "traveler", "stranger",
     "rabbit", "fox", "deer", "bird", "squirrel", "monkey", "another panda", "other panda",
+    "person", "people", "man", "woman", "boy", "girl", "child", "kid", "crowd", "companion", "sidekick",
 ]
 
 
@@ -164,7 +165,7 @@ _AGENT_WORDS = {
     "friend", "friends", "animal friend", "animal friends", "wild animal friend", "wild animal friends",
     "helper", "helpers", "villager", "villagers", "human", "hunter", "woodcutter", "lumberjack",
     "fairy", "traveler", "stranger", "rabbit", "fox", "deer", "bird", "squirrel", "monkey",
-    "another panda", "other panda",
+    "another panda", "other panda", "person", "people", "man", "woman", "boy", "girl", "child", "kid", "crowd", "companion", "sidekick",
 }
 
 
@@ -176,6 +177,16 @@ def _is_agent_like(text: Any, protagonist: str) -> bool:
     if p and s == p:
         return False
     return any(w in s for w in _AGENT_WORDS)
+
+
+def _caption_mentions_extra_agent(text: Any, protagonist: str) -> bool:
+    s = _clean_text(text).lower()
+    if not s:
+        return False
+    if _clean_text(protagonist).lower() in s:
+        s = s.replace(_clean_text(protagonist).lower(), '')
+    patterns = [r"person", r"man", r"woman", r"boy", r"girl", r"child", r"human", r"friend", r"helper", r"another", r"other"]
+    return any(re.search(pat, s) for pat in patterns)
 
 
 def _filter_protagonist_only_objects(items: Any, protagonist: str) -> List[str]:
@@ -511,6 +522,10 @@ class DCEPlanner:
                 raise ValueError("sentence is empty")
             if _contains_forbidden(data, forbidden) or _contains_forbidden(data, list(_AGENT_WORDS)):
                 raise ValueError("story step contains forbidden ungrounded agents")
+            if _caption_mentions_extra_agent(data.get("sentence", ""), getattr(seed, "protagonist", "protagonist")) or _caption_mentions_extra_agent(data.get("image_caption_en", ""), getattr(seed, "protagonist", "protagonist")):
+                raise ValueError("story step mentions a secondary agent")
+            if not _clean_text(data.get("location")) and not _clean_text(data.get("location_en")):
+                raise ValueError("story step must include one concrete location")
             if not _string_list(data.get("required_objects")) and not _string_list(data.get("required_objects_en")):
                 data["required_objects"] = _derive_required_objects(data, seed, getattr(seed, "protagonist", "protagonist"))
 
@@ -537,6 +552,8 @@ class DCEPlanner:
         data["background_elements"] = _derive_background_elements(data, seed, protagonist)
         data["supporting_cast"] = []
         data["characters"] = [protagonist]
+        if _caption_mentions_extra_agent(data.get("sentence", ""), protagonist) or _caption_mentions_extra_agent(data.get("image_caption_en", ""), protagonist):
+            raise RuntimeError(f"Frame {frame_index+1} caption still contains a secondary agent after protagonist-only enforcement.")
         return data
 
     def story_step_to_frame(self, seed: StorySeed, dce_plan: DCEPlan, emotion_arc: EmotionArc, step: Dict[str, Any], frame_index: int, num_frames: int) -> StoryboardFrame:

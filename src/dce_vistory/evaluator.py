@@ -263,8 +263,9 @@ All scores must be 0 to 1.
                         try: scores[key] = max(scores[key], float(vlm_scores[key]))
                         except Exception: pass
                 if bool(vlm_scores.get('extra_subject', False)) or bool(vlm_scores.get('duplicate_protagonist', False)):
-                    scores['bad_extra_subject_penalty'] = max(scores.get('bad_extra_subject_penalty', 0.0), 0.55)
-                    scores['identity_consistency'] = min(scores.get('identity_consistency', 0.70), 0.35)
+                    scores['bad_extra_subject_penalty'] = max(scores.get('bad_extra_subject_penalty', 0.0), 0.75)
+                    scores['identity_consistency'] = min(scores.get('identity_consistency', 0.70), 0.25)
+                    scores['story_alignment'] = min(scores.get('story_alignment', 0.60), 0.35)
                 if bool(vlm_scores.get('caption_mismatch', False)):
                     scores['story_alignment'] = min(scores.get('story_alignment', 0.60), 0.35)
                 c.notes['tifa_answers'] = vlm_scores.get('answers', [])
@@ -273,13 +274,13 @@ All scores must be 0 to 1.
                 c.notes['vlm_error'] = vlm_scores['vlm_error']
 
             overall = (
-                0.035 * scores['image_quality'] + 0.010 * scores['colorfulness'] + 0.145 * scores['identity_consistency'] + 0.260 * scores['story_alignment'] + 0.170 * scores['event_alignment'] + 0.130 * scores['event_grounding'] + 0.165 * scores['evidence_visibility'] + 0.065 * scores['emotion_visibility'] + 0.045 * scores['emotion_cause_visibility'] + 0.025 * scores['scene_alignment'] + 0.015 * scores['continuity'] - scores.get('bad_extra_subject_penalty', 0.0)
+                0.030 * scores['image_quality'] + 0.010 * scores['colorfulness'] + 0.140 * scores['identity_consistency'] + 0.300 * scores['story_alignment'] + 0.180 * scores['event_alignment'] + 0.145 * scores['event_grounding'] + 0.170 * scores['evidence_visibility'] + 0.060 * scores['emotion_visibility'] + 0.035 * scores['emotion_cause_visibility'] + 0.020 * scores['scene_alignment'] + 0.010 * scores['continuity'] - scores.get('bad_extra_subject_penalty', 0.0)
             )
             if is_ending:
                 overall += 0.02 * scores['emotion_visibility']
             scores['overall'] = round(float(overall), 4)
             c.scores.update(scores)
-            c.notes['v28_selection_reason'] = {'caption_is_primary_contract': True, 'extra_subject_penalty': scores.get('bad_extra_subject_penalty', 0.0), 'story_event_evidence_first': True}
+            c.notes['v29_selection_reason'] = {'caption_is_primary_contract': True, 'extra_subject_penalty': scores.get('bad_extra_subject_penalty', 0.0), 'story_event_evidence_first': True, 'single_protagonist_priority': True}
             ranked.append(c)
         return sorted(ranked, key=lambda x: x.scores.get('overall', 0.0), reverse=True)
 

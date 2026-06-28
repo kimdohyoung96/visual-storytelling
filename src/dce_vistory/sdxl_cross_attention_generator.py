@@ -102,7 +102,7 @@ class SDXLButterflyCrossAttentionGenerator:
         ip_adapter_repo="h94/IP-Adapter",
         ip_adapter_subfolder="sdxl_models",
         ip_adapter_weight_name="ip-adapter_sdxl.bin",
-        ip_adapter_scale=0.28,
+        ip_adapter_scale=0.22,
         use_butterfly_adapter=False,
     ):
         from diffusers import StableDiffusionXLPipeline
@@ -164,18 +164,21 @@ class SDXLButterflyCrossAttentionGenerator:
     def _reference_image_for_packet(self, packet):
         refs = getattr(packet, "reference_images", {}) or {}
         paths = []
-        if refs.get('subject'):
-            paths.append(refs.get('subject'))
-        mem = refs.get('memory_sequence', []) or []
-        if isinstance(mem, str):
-            mem = [mem]
-        paths.extend(mem[:2])
+        # V29 protagonist-only identity policy: prefer only the source/subject reference image.
+        if refs.get("subject"):
+            paths.append(refs.get("subject"))
         if not paths:
             meta = packet.control_metadata or {}
-            src = meta.get('source_reference_image_path', '')
+            src = meta.get("source_reference_image_path", "")
             if _path_exists(src):
                 paths.append(src)
-        img, desc = _combine_reference_images(paths, size=(1024, 1024))
+        if not paths:
+            mem = refs.get("memory_sequence", []) or []
+            if isinstance(mem, str):
+                mem = [mem]
+            if mem and _path_exists(mem[0]):
+                paths.append(mem[0])
+        img, desc = _combine_reference_images(paths[:1], size=(1024, 1024))
         if img is not None:
             return img, desc
         return None, ''
@@ -191,7 +194,7 @@ class SDXLButterflyCrossAttentionGenerator:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         spec = _spec_from_packet(packet)
-        modes = ["caption_locked", "object_locked", "continuity_locked", "background_locked", "emotion_locked"]
+        modes = ["caption_locked", "evidence_locked", "continuity_locked", "emotion_locked"]
         reference_image, reference_path = self._reference_image_for_packet(packet)
 
         res = []

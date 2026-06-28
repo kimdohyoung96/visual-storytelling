@@ -164,10 +164,12 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             f"\n- Required objects must be visible: {getattr(frame, 'must_show', [])}"
             f"\n- Visible cause of emotion: {getattr(frame, 'event_grounding', '')}"
             f"\n- Target emotion must be readable: {getattr(frame, 'emotion', '')}"
+            "\n- Show exactly one protagonist only. No other human or animal may appear."
             "\n- Keep the same protagonist identity as previous frames."
-            "\n- Use rich full color and a detailed background."
+            "\n- Show a single coherent story scene with uncropped face and limbs."
+            "\n- Use rich full color and a detailed but relevant background."
         )
-        packet.negative_prompt += "; generic portrait, missing required objects, wrong protagonist identity, empty background, weak action, weak emotion"
+        packet.negative_prompt += "; generic portrait, missing required objects, wrong protagonist identity, empty background, weak action, weak emotion, extra person, extra human, extra animal, second protagonist, duplicate protagonist, cropped body"
         return packet
 
     def _save_core_plan_outputs(self, out_dir: Path, seed, abstract, dce_plan, emotion_arc, full_story, storyboard):
@@ -195,8 +197,8 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         generation_policy = {
-            "version": "V28",
-            "mode": "v20_caption_grounded_multicandidate",
+            "version": "V29",
+            "mode": "v20_caption_grounded_protagonist_only_rescue",
             "protagonist_only": True,
             "no_secondary_characters": True,
             "training_free_consistency_removed": True,
@@ -213,9 +215,9 @@ class CrossAttentionButterflyDCEViStoryPipeline:
                 "visible cause/evidence"
             ],
             "blocked_story_entities": getattr(seed, "forbidden_ungrounded_entities", []),
-            "reason": "V28 returns to the V20-style protagonist-only pipeline and makes each caption the direct image-generation contract."
+            "reason": "V29 keeps the V20 caption-grounded pipeline, strengthens protagonist-only story generation, and adds a stricter story-faithful rescue loop."
         }
-        _write_json(out_dir / "generation_policy_V28.json", generation_policy)
+        _write_json(out_dir / "generation_policy_V29.json", generation_policy)
         total_frames = int(sample.get("num_frames", 6))
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, total_frames)
 
@@ -243,9 +245,9 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         retry_enabled = bool(pipe_cfg.get("emotion_retry", True))
         emotion_threshold = float(pipe_cfg.get("emotion_visibility_threshold", 0.74))
         color_threshold = float(pipe_cfg.get("colorfulness_threshold", 0.35))
-        event_threshold = float(pipe_cfg.get("event_grounding_threshold", 0.68))
-        evidence_threshold = float(pipe_cfg.get("evidence_visibility_threshold", 0.66))
-        story_threshold = float(pipe_cfg.get("story_alignment_threshold", 0.70))
+        event_threshold = float(pipe_cfg.get("event_grounding_threshold", 0.72))
+        evidence_threshold = float(pipe_cfg.get("evidence_visibility_threshold", 0.72))
+        story_threshold = float(pipe_cfg.get("story_alignment_threshold", 0.78))
 
         style = sample.get("style", "full-color cinematic storybook illustration")
         if "color" not in style.lower():
@@ -297,6 +299,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
                 or best.scores.get("colorfulness", 0.0) < color_threshold
                 or best.scores.get("event_grounding", 0.0) < event_threshold
                 or best.scores.get("evidence_visibility", 0.0) < evidence_threshold
+                or best.scores.get("bad_extra_subject_penalty", 0.0) > 0.18
             ):
                 retried = True
                 strong_packet = self._strengthen_packet(packet, frame)
@@ -315,6 +318,18 @@ class CrossAttentionButterflyDCEViStoryPipeline:
                 memory.add(frame, best)
             except Exception as e:
                 run_errors.append({"stage": f"memory.add.frame_{frame_id}", "error": str(e), "traceback": traceback.format_exc()})
+
+            # Feed selected-image feedback into the next story step so the next caption can continue the story
+            # while correcting any visual drift.
+            setattr(frame, "selected_image_path", getattr(best, "image_path", ""))
+            setattr(frame, "selected_local_caption", getattr(best, "notes", {}).get("local_caption", ""))
+            setattr(frame, "selected_feedback", {
+                "story_alignment": getattr(best, "scores", {}).get("story_alignment", 0.0),
+                "event_grounding": getattr(best, "scores", {}).get("event_grounding", 0.0),
+                "evidence_visibility": getattr(best, "scores", {}).get("evidence_visibility", 0.0),
+                "bad_extra_subject_penalty": getattr(best, "scores", {}).get("bad_extra_subject_penalty", 0.0),
+                "selected_prompt": getattr(best, "prompt", ""),
+            })
             previous_frame = frame
 
             packet_log.append({"frame_id": frame_id, "packet": _safe_asdict(packet), "retried": retried})

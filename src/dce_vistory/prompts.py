@@ -9,11 +9,13 @@ Never import characters, occupations, props, or scenes from unrelated example st
 If JSON is requested, return concise valid JSON only.
 Core structure: Desire -> Conflict -> Event Chain -> Ending Emotion (DCEE).
 
-V28 POLICY:
+V29 POLICY:
 - Protagonist-only visual storytelling is the default.
 - The story must center on the protagonist only.
 - Do not create secondary characters, animal friends, villagers, humans, helpers, enemies, woodcutters, fairies, or crowds unless the user explicitly provides them in input.
 - Background objects and simple props are allowed, but they must serve the protagonist's action.
+- All conflicts must come from the environment, the protagonist's goal, the protagonist's mistake, a lost object, or the protagonist's internal emotional state.
+- Never resolve or drive the story through another agent.
 - If an object is difficult to render or would confuse the input-image identity, remove it from the story rather than making it a new character.
 """.strip()
 
@@ -217,18 +219,21 @@ def next_story_sentence_prompt(seed: dict, dce_plan: dict, emotion_arc: dict, st
 
     return f"""
 Generate ONLY the next protagonist-centered caption for frame {frame_index+1} of {num_frames}.
-The output caption will be used directly for image generation, so it must be visually concrete.
+The output caption will be used directly for image generation, so it must be visually concrete, single-scene, and protagonist-only.
 
 Grounding rules:
 - Use only grounded entities from the seed and previous story.
 - Forbidden ungrounded entities: {forbidden_entities}
 - protagonist_only = {protagonist_only}
-- Do not create any new character, friend, animal friend, helper, enemy, human, woodcutter, fairy, crowd, or duplicate protagonist.
+- The protagonist is the only character/agent allowed in the story.
+- Do not create any new character, friend, animal friend, helper, enemy, human, child, woodcutter, fairy, crowd, or duplicate protagonist.
 - The protagonist must remain the subject of every sentence.
 - The sentence must naturally continue story_so_far.
 - Each frame must be one single scene with one main visible action.
+- Conflict must come from environment, object state, search, movement, weather, distance, obstacle, loss, or internal emotion.
 - If the caption mentions an object, that object must be concrete and drawable.
 - If the object is not grounded in input/seed/story history, do not mention it.
+- Keep the frame easy to draw: one protagonist, one action, one place, one emotional cue.
 
 Allowed visual elements:
 - protagonist
@@ -244,11 +249,12 @@ Strict output rules:
 - image_caption_en must be a direct English image-generation caption for exactly the same content as sentence.
 - subject must be the protagonist only.
 - supporting_cast must be [].
-- sentence and image_caption_en must contain exactly one primary visible action by the protagonist.
+- sentence and image_caption_en must contain exactly one protagonist and exactly one primary visible action by the protagonist.
 - sentence and image_caption_en must include one concrete place/background.
 - required_objects / required_objects_en must contain only visible props/background objects required by this exact caption.
 - background_elements / background_elements_en must contain only visible scene elements required by this exact caption.
-- do not include humans, children, extra animals, or second protagonist in required_objects.
+- do not include humans, children, extra animals, reflections that look like another protagonist, or a second protagonist in required_objects.
+- prefer full-body or medium-wide situations that are easy to render as a story frame.
 - frame emotion target: {target_emotion}
 - frame emotion intensity target: {intens}
 
@@ -261,7 +267,7 @@ DCEE plan:
 Story so far:
 {story_so_far}
 
-Previous frame summary:
+Previous selected frame summary / feedback:
 {previous_frame}
 """.strip()
 
