@@ -9,7 +9,7 @@ Never import characters, occupations, props, or scenes from unrelated example st
 If JSON is requested, return concise valid JSON only.
 Core structure: Desire -> Conflict -> Event Chain -> Ending Emotion (DCEE).
 
-V24 POLICY:
+V25 POLICY:
 - The input image is a hard identity anchor. The protagonist's species, fur/skin/clothing color, age impression, body shape, and distinctive appearance must be preserved.
 - If the input subject is a white bear, keep a white bear in story and image generation; never drift to a brown bear or a different species.
 - The story must stay protagonist-centered and visually drawable.
@@ -17,6 +17,8 @@ V24 POLICY:
 - One frame corresponds to one single-scene image. Never describe split-screen, multiple panels, or multiple moments in one frame.
 - Use ConsiStory-inspired subject-only consistency: preserve the protagonist identity across frames, but do not copy background/layout mistakes.
 - Each frame must contain a visible event, not just a nice portrait.
+- Each frame must be a full-body or mostly full-body composition unless the story explicitly requires close-up.
+- Do not crop the protagonist's head, face, hands/paws, or feet.
 """.strip()
 
 SYSTEM_VLM = """
@@ -33,7 +35,8 @@ QUALITY_SUFFIX = (
 NEGATIVE_PROMPT = (
     "monochrome, black and white, grayscale, pencil sketch, line art only, colorless image, "
     "split screen, comic panel, storyboard sheet, collage, diptych, triptych, multi-panel, multiple scenes in one frame, "
-    "extra character, secondary character, crowd, unrelated animal, unrelated human, duplicated protagonist, duplicate subject, second bear, two bears, multiple bears, clone, mirror duplicate, "
+    "cropped head, cropped face, cropped feet, cropped paws, cut off body, out of frame, partial body, extreme close-up, "
+    "extra character, secondary character, crowd, unrelated animal, unrelated human, duplicated protagonist, second protagonist, two protagonists, two bears, multiple bears, extra bear, tiny bear, baby bear, bear cub, "
     "missing protagonist, missing action, missing required prop, missing visual evidence, emotionless face, weak expression, stiff pose, portrait only, "
     "empty background, low quality, blurry, bad anatomy, distorted face, watermark, text"
 )
@@ -215,6 +218,32 @@ DCEE plan: {dce_plan}
 
 
 
+
+def _dcee_stage_text(frame_index: int, num_frames: int) -> str:
+    """DCEE frame-level story scaffold. Keeps each frame from becoming a generic portrait."""
+    idx = int(frame_index)
+    total = max(1, int(num_frames))
+    if total <= 3:
+        stages = [
+            "DESIRE: show the protagonist clearly wanting or moving toward the goal with visible goal object/evidence.",
+            "CONFLICT/EVENT: show a concrete obstacle, accident, loss, distance, weather, or environmental force disrupting the goal.",
+            "ENDING: show the visible consequence and target ending emotion with clear evidence."
+        ]
+        return stages[min(idx, len(stages) - 1)]
+    # 6-frame default, but works for nearby lengths.
+    if idx == 0:
+        return "D - DESIRE SETUP: protagonist appears full-body, goal/desired object or destination is visible, emotion is hopeful/expectant."
+    if idx == 1:
+        return "C - CONFLICT TRIGGER: a visible environmental problem or mistake interrupts the desire; show the protagonist's reaction and the physical cause."
+    if idx == 2:
+        return "E1 - ESCALATING EVENT: protagonist takes a clear action to recover, chase, reach, protect, search, or fix the problem; action must be visible."
+    if idx == 3:
+        return "E2 - CONSEQUENCE EVENT: show the concrete consequence of the action; use visible evidence such as ripples, fallen object, empty jar, footprints, broken twig, or object drifting away. Do not use reflection as a second protagonist."
+    if idx == 4:
+        return "TURNING POINT: protagonist recognizes the outcome through visible evidence; do not use abstract realization alone; show the evidence that causes the realization."
+    return "ENDING EMOTION: protagonist is alone as exactly one subject, full/mostly full body visible, with final emotion and visible evidence of the story outcome."
+
+
 def next_story_sentence_prompt(seed: dict, dce_plan: dict, emotion_arc: dict, story_so_far: list, previous_frame: dict | None, frame_index: int, num_frames: int, forbidden_entities: List[str], protagonist_only: bool = True) -> str:
     target_emotion = ""
     intens = ""
@@ -226,12 +255,17 @@ def next_story_sentence_prompt(seed: dict, dce_plan: dict, emotion_arc: dict, st
         if frame_index < len(intensities):
             intens = intensities[frame_index]
 
+    dcee_stage = _dcee_stage_text(frame_index, num_frames)
+
     return f"""
 Generate ONLY the next DCEE event step for frame {frame_index+1} of {num_frames}.
 
 You must output two layers:
 1) sentence: Korean natural story sentence for the paper/demo.
 2) image_sentence_en and visual fields: English, concrete, SDXL-friendly rendering instruction.
+
+DCEE stage for this frame:
+{dcee_stage}
 
 Grounding rules:
 - Use only grounded entities from seed, DCEE plan, story_so_far, and previous_frame.
@@ -241,18 +275,16 @@ Grounding rules:
 - Do not create friends, animal friends, helpers, enemies, humans, woodcutters, fairies, crowds, or duplicate protagonist.
 - Preserve protagonist identity from the input image and seed character profile.
 - If protagonist is a white bear, keep exactly one white bear.
-- Do not use reflection/mirror/shadow as a second character. If reflection is needed, describe ripples or water surface only.
+- Do not use reflection/mirror/shadow as a second character. If water is present, describe ripples or water surface only.
+- The sentence must follow the DCEE stage above and must advance the story.
 
-DCEE event requirement:
-- This frame must advance the DCEE chain.
-- It must have a visible event, not just a nice portrait.
-- Event must show a state change: before -> visible action -> after/evidence.
-- The action must be visually readable from a single image.
-- Avoid abstract frames such as "realizes", "understands", "looks at nothing", "empty place" unless converted into visible evidence.
-
-Visual simplicity rules:
+Visual composition rules:
 - One frame = one single coherent scene.
-- One main action only.
+- Use one main action only.
+- The protagonist's full body or mostly full body must be visible unless the story explicitly requires a close-up.
+- Do not crop head, face, paws/hands, feet, or important object.
+- Leave safe margins around the protagonist.
+- Use camera_composition_en to specify uncropped full-body/medium-wide composition.
 - Keep object inventory small and concrete.
 - The image prompt fields must be English.
 - No split-screen, no comic panel, no multi-moment layout.
@@ -297,9 +329,10 @@ Strict output rules:
 - required_objects_en must contain only concrete visible objects, maximum 5.
 - background_elements_en must contain concrete background elements, maximum 4.
 - absent_objects must list objects that should NOT appear in this frame.
-- forbidden_visuals must include duplicate protagonist, second bear, extra character, split panel.
+- forbidden_visuals must include duplicate protagonist, second bear, extra character, split panel, cropped head, cropped feet.
 - image_sentence_en must be one clear English sentence that directly describes the image to generate.
 - action_pose_en must describe the protagonist's pose/action clearly.
+- camera_composition_en must include: full body or mostly full body, centered composition, safe margins, no cropping.
 - target emotion for this frame: {target_emotion}
 - target emotion intensity: {intens}
 

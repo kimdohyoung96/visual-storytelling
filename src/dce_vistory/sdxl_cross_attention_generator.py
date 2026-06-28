@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, List
+import hashlib
 import torch
 from PIL import Image
 
@@ -188,7 +189,9 @@ class SDXLButterflyCrossAttentionGenerator:
             prompt = prompt_from_spec(spec, mode)
             negative_prompt = negative_from_spec(spec)
 
-            sd = self.seed + int(frame_id) * 1000 + cid
+            # V25: include prompt hash and version salt so changed prompts do not silently reproduce old V23/V24 images.
+            prompt_hash = int(hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:8], 16) % 100000
+            sd = self.seed + 250000 + int(frame_id) * 1000 + cid + prompt_hash
             gen = torch.Generator(device=self.device).manual_seed(sd) if self.device.startswith("cuda") else torch.Generator().manual_seed(sd)
 
             kwargs = dict(
@@ -240,8 +243,11 @@ class SDXLButterflyCrossAttentionGenerator:
                     },
                     notes={
                         "seed": sd,
+                        "prompt_hash_seed_offset": prompt_hash,
+                        "v25_seed_policy": "base_seed + 250000 + frame*1000 + candidate + prompt_hash",
                         "prompt_variant_mode": mode,
                         "dcee_event_locked_generation": True,
+                        "v25_uncropped_fullbody_prompt": True,
                         "untrained_butterfly_adapter_disabled": not self.use_butterfly_adapter,
                         "reference_image_path": reference_path,
                         "ip_adapter_loaded": self.ip_adapter_loaded,

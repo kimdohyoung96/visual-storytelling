@@ -109,7 +109,7 @@ def _make_contact_sheet_local(image_paths: List[str], out_path: Path, cols: int 
     header_h = 54
     canvas = Image.new("RGB", (cols * thumb_size[0], rows * thumb_size[1] + header_h), "white")
     draw = ImageDraw.Draw(canvas)
-    draw.text((12, 12), "DCEE-CausalVerse V24 Contact Sheet", fill=(0, 0, 0))
+    draw.text((12, 12), "DCEE-CausalVerse V25 Contact Sheet", fill=(0, 0, 0))
     for idx, p in enumerate(valid):
         img = Image.open(p).convert("RGB")
         img.thumbnail((thumb_size[0] - 20, thumb_size[1] - 44))
@@ -259,7 +259,7 @@ story_alignment, event_alignment, event_grounding, evidence_visibility,
 emotion_visibility, emotion_cause_visibility, scene_alignment, continuity,
 identity_consistency, single_scene_score, qa_score,
 exactly_one_protagonist, duplicate_protagonist, second_protagonist, split_panel, extra_character,
-action_visible, protagonist_sitting_if_required, reason.
+action_visible, full_body_visible, cropped_body, cropped_head, cropped_feet, protagonist_sitting_if_required, reason.
 
 Scoring rules:
 - Scores are 0.0 to 1.0.
@@ -267,6 +267,7 @@ Scoring rules:
 - If the required action is not visible, set event_alignment<=0.35.
 - If the image is a portrait but the story requires an action/location, set story_alignment<=0.45.
 - If the image has multiple panels/scenes, set split_panel=true and single_scene_score<=0.2.
+- If the protagonist's head, face, feet, paws/hands, or important object is cropped out, set cropped_body=true and full_body_visible=false.
 - Prefer story/action/evidence correctness over beauty.
 """.strip()
         try:
@@ -296,7 +297,7 @@ Protagonist identity: {getattr(frame, 'character_reference_prompt', '') or getat
 Candidate IDs in image order: {cand_ids}
 
 Selection rule:
-1. Reject any candidate with duplicate protagonist, two bears, extra character, split panel, or multi-scene.
+1. Reject any candidate with duplicate protagonist, two bears, extra character, split panel, multi-scene, cropped head/face/feet, or cut-off body.
 2. Among valid candidates, choose the candidate where the required event/action is most visible.
 3. Then choose the candidate with best required object/evidence visibility.
 4. Then choose the candidate with best emotion and emotion-cause visibility.
@@ -314,6 +315,10 @@ Return JSON only:
       "emotion_visibility": 0.0,
       "identity_consistency": 0.0,
       "single_scene_score": 0.0,
+      "full_body_visible": true,
+      "cropped_body": false,
+      "cropped_head": false,
+      "cropped_feet": false,
       "duplicate_protagonist": false,
       "extra_character": false,
       "split_panel": false,
@@ -349,6 +354,8 @@ Return JSON only:
                 "single_scene_score": 0.55,
                 "duplicate_penalty": 0.0,
                 "action_missing_penalty": 0.0,
+                "crop_penalty": 0.0,
+                "full_body_visibility": 0.50,
                 "variant_priority": _variant_priority(c, is_ending=is_ending),
                 "static_penalty": _candidate_static_penalty(frame, c),
             }
@@ -379,6 +386,14 @@ Return JSON only:
                 split = bool(vlm_scores.get("split_panel", False))
                 exactly_one = bool(vlm_scores.get("exactly_one_protagonist", False))
                 action_visible = bool(vlm_scores.get("action_visible", False))
+                cropped = any(bool(vlm_scores.get(k, False)) for k in ["cropped_body", "cropped_head", "cropped_feet"])
+                full_body_visible = bool(vlm_scores.get("full_body_visible", False))
+
+                if cropped:
+                    scores["crop_penalty"] = max(scores["crop_penalty"], 0.45)
+                    scores["full_body_visibility"] = min(scores["full_body_visibility"], 0.20)
+                elif full_body_visible:
+                    scores["full_body_visibility"] = max(scores["full_body_visibility"], 0.80)
 
                 if duplicate:
                     scores["duplicate_penalty"] = max(scores["duplicate_penalty"], 0.90)
@@ -392,7 +407,7 @@ Return JSON only:
                     scores["action_missing_penalty"] = max(scores["action_missing_penalty"], 0.35)
                     scores["event_alignment"] = min(scores["event_alignment"], 0.35)
 
-                c.notes["v24_vlm_judgment"] = vlm_scores
+                c.notes["v25_vlm_judgment"] = vlm_scores
                 c.notes["vlm_reason"] = vlm_scores.get("reason", "")
             elif vlm_scores and "vlm_error" in vlm_scores:
                 c.notes["vlm_error"] = vlm_scores["vlm_error"]
@@ -409,11 +424,13 @@ Return JSON only:
                 + 0.055 * scores["emotion_cause_visibility"]
                 + 0.035 * scores["scene_alignment"]
                 + 0.040 * scores["continuity"]
-                + 0.055 * scores["single_scene_score"]
+                + 0.050 * scores["single_scene_score"]
+                + 0.050 * scores["full_body_visibility"]
                 + 0.025 * scores["qa_score"]
                 + scores["variant_priority"]
                 - scores["duplicate_penalty"]
                 - scores["action_missing_penalty"]
+                - scores["crop_penalty"]
                 - scores["static_penalty"]
             )
             if is_ending:
@@ -421,13 +438,15 @@ Return JSON only:
 
             scores["overall"] = round(float(overall), 4)
             c.scores.update(scores)
-            c.notes["v24_selection_reason"] = {
+            c.notes["v25_selection_reason"] = {
                 "story_first_selection": True,
                 "event_action_evidence_first": True,
                 "image_quality_weight_minimal": True,
                 "variant_priority": scores["variant_priority"],
                 "duplicate_penalty": scores["duplicate_penalty"],
                 "action_missing_penalty": scores["action_missing_penalty"],
+                "crop_penalty": scores["crop_penalty"],
+                "full_body_visibility": scores["full_body_visibility"],
                 "static_penalty": scores["static_penalty"],
                 "ending_mode": bool(is_ending),
             }
@@ -444,7 +463,7 @@ Return JSON only:
                 judgments = pairwise.get("candidate_judgments", {}) or {}
                 for c in ranked:
                     cid = int(getattr(c, "candidate_id", -1))
-                    c.notes["v24_pairwise_selection"] = pairwise
+                    c.notes["v25_pairwise_selection"] = pairwise
                     j = judgments.get(str(cid), judgments.get(cid, {})) if isinstance(judgments, dict) else {}
                     if isinstance(j, dict):
                         for key in [
@@ -457,21 +476,25 @@ Return JSON only:
                             c.scores["duplicate_penalty"] = max(c.scores.get("duplicate_penalty", 0.0), 0.90)
                         if bool(j.get("split_panel", False)):
                             c.scores["duplicate_penalty"] = max(c.scores.get("duplicate_penalty", 0.0), 0.60)
+                        if bool(j.get("cropped_body", False)) or bool(j.get("cropped_head", False)) or bool(j.get("cropped_feet", False)):
+                            c.scores["crop_penalty"] = max(c.scores.get("crop_penalty", 0.0), 0.45)
+                        if bool(j.get("full_body_visible", False)):
+                            c.scores["full_body_visibility"] = max(c.scores.get("full_body_visibility", 0.0), 0.80)
                         if not bool(j.get("action_visible", True)):
                             c.scores["action_missing_penalty"] = max(c.scores.get("action_missing_penalty", 0.0), 0.35)
                     if cid == best_id:
                         c.scores["overall"] = c.scores.get("overall", 0.0) + 1.0
-                        c.notes["v24_pairwise_chosen"] = True
+                        c.notes["v25_pairwise_chosen"] = True
                     if cid in rejected:
                         c.scores["overall"] = c.scores.get("overall", 0.0) - 1.0
-                        c.notes["v24_pairwise_rejected"] = True
+                        c.notes["v25_pairwise_rejected"] = True
                 ranked = sorted(ranked, key=lambda x: x.scores.get("overall", 0.0), reverse=True)
             except Exception as e:
                 for c in ranked:
-                    c.notes["v24_pairwise_parse_error"] = str(e)[:300]
+                    c.notes["v25_pairwise_parse_error"] = str(e)[:300]
         elif pairwise and "vlm_pairwise_error" in pairwise:
             for c in ranked:
-                c.notes["v24_pairwise_error"] = pairwise["vlm_pairwise_error"]
+                c.notes["v25_pairwise_error"] = pairwise["vlm_pairwise_error"]
 
         return ranked
 
@@ -484,7 +507,7 @@ Return JSON only:
         n = max(1, len(images))
         keys = [
             "image_quality", "colorfulness", "identity_consistency", "story_alignment", "event_alignment",
-            "event_grounding", "evidence_visibility", "emotion_visibility", "emotion_cause_visibility",
+            "event_grounding", "evidence_visibility", "emotion_visibility", "emotion_cause_visibility", "full_body_visibility",
             "scene_alignment", "continuity", "single_scene_score", "qa_score", "overall"
         ]
         avg = {k: round(sum(float(getattr(img, "scores", {}).get(k, 0.0)) for img in images) / n, 4) for k in keys}

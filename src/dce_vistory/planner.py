@@ -758,9 +758,9 @@ class DCEPlanner:
             data["background_elements"] = _derive_background_elements(data, seed, protagonist)
 
         data["action_pose"] = _clean_text(data.get("action_pose_en") or data.get("action_pose") or data.get("action") or "body pose clearly shows the event")
-        data["camera_composition"] = _clean_text(data.get("camera_composition_en") or data.get("camera_composition") or "single-scene medium shot centered on the protagonist and visible event")
+        data["camera_composition"] = _clean_text(data.get("camera_composition_en") or data.get("camera_composition") or "single-scene medium-wide full-body shot centered on the protagonist with safe margins and no cropping")
         data["absent_objects"] = _string_list(data.get("absent_objects", []))
-        data["forbidden_visuals"] = _unique(_string_list(data.get("forbidden_visuals", [])) + ["duplicate protagonist", "second bear", "extra character", "split panel", "comic panel"])
+        data["forbidden_visuals"] = _unique(_string_list(data.get("forbidden_visuals", [])) + ["duplicate protagonist", "second bear", "extra character", "split panel", "comic panel", "cropped head", "cropped face", "cropped feet", "cut off body", "out of frame"])
 
         data["frame_id"] = frame_index + 1
         data["sentence"] = _clean_text(data.get("sentence"))
@@ -804,7 +804,7 @@ class DCEPlanner:
             "visual_focus": step.get("action", ""),
             "key_objects": _string_list(step.get("required_objects")),
             "facial_cue": rule["face"],
-            "body_cue": _clean_text(step.get("action_pose") or rule["body"]),
+            "body_cue": _clean_text(step.get("action_pose") or rule["body"] or "full body pose clearly shows the current event"),
             "event_cue": step.get("visible_cause", ""),
             "scene_cue": step.get("location", ""),
             "cinematic_cue": rule["composition"],
@@ -841,6 +841,7 @@ class DCEPlanner:
             "event_grounding_text": step.get("visible_cause", ""),
             "full_story_sentence": step.get("sentence", ""),
             "single_scene_only": True,
+            "dcee_stage": "frame-level DCEE event step",
             "must_not_show": _unique(getattr(seed, "forbidden_ungrounded_entities", []) + _string_list(step.get("absent_objects", [])) + _string_list(step.get("forbidden_visuals", []))),
         }
         for k, v in extra.items():

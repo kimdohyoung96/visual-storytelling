@@ -43,6 +43,33 @@ def _write_json(path: Path, obj: Any):
     path.write_text(json.dumps(_safe_asdict(obj), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+
+def _clear_previous_visual_outputs(out_dir: Path):
+    """V25: avoid reading stale contact sheets or old candidate files from earlier runs."""
+    out_dir = Path(out_dir)
+    targets = [
+        out_dir / "frames",
+        out_dir / "ending_candidates",
+    ]
+    patterns = ["frame_*_cand_*.png", "frame_*.png", "*.tmp.png"]
+    for folder in targets:
+        if not folder.exists():
+            continue
+        for pattern in patterns:
+            for p in folder.glob(pattern):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+    for name in ["contact_sheet.png", "candidate_manifest.json", "selected_images.json", "evaluation.json", "storyboard.json", "full_story.json"]:
+        try:
+            p = out_dir / name
+            if p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+
 def _image_path_exists(path: Any) -> bool:
     if not path:
         return False
@@ -177,8 +204,9 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             )
 
         packet.positive_prompt += (
-            "\n\nV24 DCEE EVENT-FRAME GROUNDING RULES:"
-            f"\n- Render ONE single coherent scene only; never use split panels or multiple moments."
+            "\n\nV25 DCEE STAGE + UNCROPPED EVENT-FRAME GROUNDING RULES:"
+            f"\n- Render ONE single coherent scene only; never use split panels or multiple moments."\
+            f"\n- Use centered full-body or mostly full-body composition with safe margins; do not crop head, face, paws, hands, feet, or required objects."
             f"\n- ConsiStory-lite subject anchor: preserve only protagonist identity across frames; do not copy background/layout mistakes."\
             f"\n- Render the SAME protagonist identity: {identity_pos}"
             f"\n- Use the input image as a hard reference anchor. If the subject is {protagonist_short}, keep {protagonist_short} in this frame."
@@ -242,6 +270,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         out_dir.mkdir(parents=True, exist_ok=True)
         frames_dir.mkdir(parents=True, exist_ok=True)
         ending_dir.mkdir(parents=True, exist_ok=True)
+        _clear_previous_visual_outputs(out_dir)
 
         run_errors: List[Dict[str, Any]] = []
         image_summary = self.image_understanding.analyze(sample.get("image_path"), sample)
@@ -249,8 +278,8 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         generation_policy = {
-            "version": "V24",
-            "mode": "dcee_event_frame_grounded_pairwise_selector",
+            "version": "V25",
+            "mode": "dcee_stage_uncropped_event_grounded_selector",
             "protagonist_only": True,
             "single_scene_per_frame": True,
             "multiple_candidates_for_selection": True,
@@ -261,15 +290,18 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "dcee_event_contract_per_frame": True,
             "english_sdxl_visual_prompt": True,
             "pairwise_vlm_candidate_selection": True,
+            "clear_stale_outputs_before_run": True,
+            "prompt_hash_seed_policy": True,
+            "uncropped_fullbody_composition": True,
             "vlm_story_event_candidate_selector": True,
             "previous_generated_images_not_used_as_ip_reference_by_default": True,
             "allowed_visual_elements": [
                 "protagonist", "protagonist props", "grounded background objects", "weather", "lighting", "emotion cues"
             ],
             "blocked_story_entities": getattr(seed, "forbidden_ungrounded_entities", []),
-            "reason": "V24 keeps ConsiStory-inspired subject-only identity anchoring but removes unstable attention-style assumptions. It adds DCEE event contracts, English SDXL visual prompts, strict single-subject prompts, and pairwise VLM candidate selection."
+            "reason": "V25 adds DCEE stage scaffolding, uncropped full-body composition constraints, prompt-hash seed policy, stale-output cleanup, and stronger crop/duplicate penalties."
         }
-        _write_json(out_dir / "generation_policy_V24.json", generation_policy)
+        _write_json(out_dir / "generation_policy_V25.json", generation_policy)
         total_frames = int(sample.get("num_frames", 6))
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, total_frames)
 
@@ -416,7 +448,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "storyboard": str(out_dir / "storyboard.json"),
             "full_story": str(out_dir / "full_story.json"),
             "dcee_plan": str(out_dir / "dcee_plan.json"),
-            "generation_policy_V23": str(out_dir / "generation_policy_V24.json"),
+            "generation_policy_V23": str(out_dir / "generation_policy_V25.json"),
             "has_contact_sheet": (out_dir / "contact_sheet.png").exists(),
             "num_selected_images": len(selected_images),
         })

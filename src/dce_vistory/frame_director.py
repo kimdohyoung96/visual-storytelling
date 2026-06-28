@@ -161,7 +161,7 @@ def _forbidden_for_subject(protagonist: str, seed: Any = None, frame: Any = None
         "extra character", "extra animal", "unrelated extra people", "unrelated humans",
         "wrong age", "wrong gender", "child version", "baby version", "juvenile version",
         "wrong species", "wrong fur color", "wrong coat color", "different identity", "standing portrait without event", "character looking at camera only",
-        "generic portrait only", "empty background", "missing action", "missing event", "missing required object",
+        "generic portrait only", "empty background", "missing action", "missing event", "missing required object", "cropped head", "cropped face", "cropped feet", "cut off body", "partial body", "out of frame", "extreme close-up",
         "unrelated object", "unrelated prop", "human protagonist", "human face",
     ]
     neg = clean(getattr(seed, "protagonist_negative_identity_prompt", "")) if seed is not None else ""
@@ -281,8 +281,8 @@ def prompt_from_spec(spec: FrameVisualSpec, mode: str = "event_locked") -> str:
 
     base = (
         f"full-color cinematic storybook illustration. frame {spec.frame_id}/{spec.total_frames}. "
-        f"ONE SINGLE COHERENT SCENE, one moment only, not split-screen, not comic panels. "
-        f"EXACTLY ONE {spec.protagonist} in the whole image; no second {spec.protagonist}; no duplicate protagonist; no extra characters. "
+        f"ONE SINGLE COHERENT SCENE, one moment only, not split-screen, not comic panels. "f"Use full-body or mostly full-body medium-wide composition, centered subject, safe margins, no cropping of head, face, paws, hands, or feet. "
+        f"EXACTLY ONE {spec.protagonist} in the whole image; no second {spec.protagonist}; no duplicate protagonist; no extra characters; no small secondary bear. "
         f"subject identity anchor: {identity}. "
         f"story sentence: {sentence}. "
         f"main visible event/action: {action}. "
@@ -290,7 +290,7 @@ def prompt_from_spec(spec: FrameVisualSpec, mode: str = "event_locked") -> str:
         f"allowed visual inventory only: {obj}. "
         f"location: {loc}; weather: {weather}; atmosphere: {atmosphere}. "
         f"emotion: {spec.emotion}; face: {face}; body pose: {body}. camera: {camera}. "
-        f"visible DCEE checklist: protagonist + current action + cause/evidence + required objects + background + emotion. "
+        f"visible DCEE checklist: protagonist + current action + cause/evidence + required objects + background + emotion + uncropped full body. "
         f"never show forbidden items: {', '.join(unique(spec.forbidden_objects, 12))}. "
     )
 
@@ -309,7 +309,7 @@ def prompt_from_spec(spec: FrameVisualSpec, mode: str = "event_locked") -> str:
 
 def negative_from_spec(spec: FrameVisualSpec) -> str:
     return clean(
-        "split screen, diptych, triptych, comic panel, storyboard sheet, collage, multiple scenes in one image, "
+        "split screen, diptych, triptych, comic panel, storyboard sheet, collage, multiple scenes in one image, cropped head, cropped face, cropped feet, cut off body, partial body, out of frame, extreme close-up, "
         "duplicate protagonist, second protagonist, two protagonists, two bears, multiple bears, extra bear, baby bear, bear cub, small bear, "
         "extra character, extra animal, unrelated humans, human face, "
         "generic portrait, repeated static pose, unrelated poster image, missing protagonist, wrong protagonist, wrong species, wrong fur color, "
