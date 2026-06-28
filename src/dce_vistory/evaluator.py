@@ -109,7 +109,7 @@ def _make_contact_sheet_local(image_paths: List[str], out_path: Path, cols: int 
     header_h = 54
     canvas = Image.new("RGB", (cols * thumb_size[0], rows * thumb_size[1] + header_h), "white")
     draw = ImageDraw.Draw(canvas)
-    draw.text((12, 12), "DCEE-CausalVerse V26 Contact Sheet", fill=(0, 0, 0))
+    draw.text((12, 12), "DCEE-CausalVerse V27 Contact Sheet", fill=(0, 0, 0))
     for idx, p in enumerate(valid):
         img = Image.open(p).convert("RGB")
         img.thumbnail((thumb_size[0] - 20, thumb_size[1] - 44))
@@ -178,6 +178,42 @@ def _candidate_static_penalty(frame: Any, candidate: CandidateImage) -> float:
     return min(0.20, penalty)
 
 
+
+
+def _required_object_coverage(text: str, required: Any) -> float:
+    cap = str(text or "").lower()
+    objs = [str(x).lower() for x in (required or []) if str(x).strip()]
+    visual = []
+    for o in objs:
+        if o in {"white bear", "bear", "protagonist", "sitting pose", "gazing pose"}:
+            continue
+        visual.append(o)
+    if not visual:
+        return 0.5
+    hits = 0
+    for obj in visual[:6]:
+        alts = {obj}
+        if "honey jar" in obj:
+            alts |= {"jar", "honey"}
+        if obj == "riverbank":
+            alts |= {"river", "shore", "bank", "water"}
+        if obj == "forest":
+            alts |= {"woods", "trees"}
+        if any(a in cap for a in alts):
+            hits += 1
+    return max(0.0, min(1.0, hits / max(1, min(4, len(visual)))))
+
+
+def _caption_faithfulness(frame: Any, caption: str) -> float:
+    txt = str(caption or "")
+    vals = [
+        _overlap(txt, getattr(frame, "story_sentence", "")),
+        _overlap(txt, getattr(frame, "image_sentence", "")),
+        _overlap(txt, getattr(frame, "event", "")),
+    ]
+    obj_cov = _required_object_coverage(txt, getattr(frame, "must_show", []) or getattr(frame, "evidence_objects", []))
+    return max(vals + [0.55 * obj_cov])
+
 class DCEQAEvaluator:
     def __init__(self, llm: BaseLLM, vlm: BaseVLM, use_vlm: bool = True, save_contact_sheet: bool = True, use_local_caption_scorer: bool = True):
         self.llm = llm
@@ -229,11 +265,13 @@ class DCEQAEvaluator:
                 txt = str(cap)
             return {
                 "local_caption": txt,
-                "story_alignment_local": _overlap(txt, getattr(frame, "story_sentence", "")),
+                "story_alignment_local": _caption_faithfulness(frame, txt),
                 "event_alignment_local": max(_overlap(txt, getattr(frame, "event", "")), _overlap(txt, getattr(frame, "event_grounding", ""))),
-                "evidence_visibility_local": max(_overlap(txt, getattr(frame, "evidence_objects", [])), _overlap(txt, getattr(frame, "must_show", []))),
+                "evidence_visibility_local": max(_overlap(txt, getattr(frame, "evidence_objects", [])), _overlap(txt, getattr(frame, "must_show", [])), _required_object_coverage(txt, getattr(frame, "must_show", []))),
                 "scene_alignment_local": max(_overlap(txt, getattr(frame, "scene_location", "")), _overlap(txt, getattr(frame, "weather", ""))),
                 "emotion_visibility_local": max(_overlap(txt, getattr(frame, "emotion", "")), _overlap(txt, getattr(frame, "emotion_evidence", []))),
+                "required_object_coverage_local": _required_object_coverage(txt, getattr(frame, "must_show", [])),
+                "caption_faithfulness_local": _caption_faithfulness(frame, txt),
             }
         except Exception as e:
             return {"local_caption_error": str(e)[:300]}
@@ -245,11 +283,13 @@ class DCEQAEvaluator:
 You are a strict visual storytelling candidate judge.
 Evaluate the image against the planned frame. Return JSON only.
 
+Exact frame caption: {getattr(frame, 'caption_ko', '') or getattr(frame, 'story_sentence', '')}
+Image-friendly sentence: {getattr(frame, 'caption_en', '') or getattr(frame, 'image_sentence', '')}
 Planned story sentence: {getattr(frame, 'story_sentence', '')}
-Image-friendly sentence: {getattr(frame, 'image_sentence', '')}
 Planned event/action: {getattr(frame, 'event', '')}
 Event cause/evidence: {getattr(frame, 'event_grounding', '')}
 Required visual inventory: {getattr(frame, 'must_show', []) or getattr(frame, 'evidence_objects', [])}
+Forbidden/absent elements: {getattr(frame, 'must_not_show', [])}
 Target emotion: {getattr(frame, 'emotion', '')}
 Location/weather/background: {getattr(frame, 'scene_location', '')}, {getattr(frame, 'weather', '')}, {getattr(frame, 'environment_details', [])}
 Protagonist identity: {getattr(frame, 'character_reference_prompt', '') or getattr(frame, 'character_identity', '')}
@@ -265,6 +305,8 @@ Scoring rules:
 - Scores are 0.0 to 1.0.
 - If two bears/two protagonists/duplicate protagonist appear, set duplicate_protagonist=true and identity_consistency<=0.25.
 - If the required action is not visible, set event_alignment<=0.35.
+- If the image ignores the exact caption and becomes a generic portrait or a different event, set story_alignment<=0.30.
+- If an unrelated human or unrelated extra subject appears, set extra_character=true and identity_consistency<=0.30.
 - If the image is a portrait but the story requires an action/location, set story_alignment<=0.45.
 - If the image has multiple panels/scenes, set split_panel=true and single_scene_score<=0.2.
 - If the protagonist's head, face, feet, paws/hands, or important object is cropped out, set cropped_body=true and full_body_visible=false.
@@ -365,12 +407,15 @@ Return JSON only:
                 c.notes.update({k: v for k, v in local_scores.items() if "error" in k or k == "local_caption"})
                 cap = local_scores.get("local_caption", "")
                 scores["duplicate_penalty"] = max(scores["duplicate_penalty"], _caption_bad_signals(cap))
-                scores["story_alignment"] = max(scores["story_alignment"], _clamp01(local_scores.get("story_alignment_local", 0.0)))
+                scores["story_alignment"] = max(scores["story_alignment"], _clamp01(local_scores.get("story_alignment_local", 0.0)), _clamp01(local_scores.get("caption_faithfulness_local", 0.0)))
                 scores["event_alignment"] = max(scores["event_alignment"], _clamp01(local_scores.get("event_alignment_local", 0.0)))
                 scores["event_grounding"] = max(scores["event_grounding"], _clamp01(local_scores.get("event_alignment_local", 0.0)))
-                scores["evidence_visibility"] = max(scores["evidence_visibility"], _clamp01(local_scores.get("evidence_visibility_local", 0.0)))
+                scores["evidence_visibility"] = max(scores["evidence_visibility"], _clamp01(local_scores.get("evidence_visibility_local", 0.0)), _clamp01(local_scores.get("required_object_coverage_local", 0.0)))
                 scores["emotion_visibility"] = max(scores["emotion_visibility"], _clamp01(local_scores.get("emotion_visibility_local", 0.0)))
                 scores["scene_alignment"] = max(scores["scene_alignment"], _clamp01(local_scores.get("scene_alignment_local", 0.0)))
+                if re.search(r"\bperson\b|\bman\b|\bwoman\b|\bhuman\b|\bboy\b|\bgirl\b|\bchild\b", cap):
+                    scores["duplicate_penalty"] = max(scores["duplicate_penalty"], 0.55)
+                    scores["identity_consistency"] = min(scores["identity_consistency"], 0.25)
 
             vlm_scores = self._vlm_frame_eval(frame, c)
             if vlm_scores and "vlm_error" not in vlm_scores:
@@ -407,26 +452,26 @@ Return JSON only:
                     scores["action_missing_penalty"] = max(scores["action_missing_penalty"], 0.35)
                     scores["event_alignment"] = min(scores["event_alignment"], 0.35)
 
-                c.notes["v26_vlm_judgment"] = vlm_scores
+                c.notes["v27_vlm_judgment"] = vlm_scores
                 c.notes["vlm_reason"] = vlm_scores.get("reason", "")
             elif vlm_scores and "vlm_error" in vlm_scores:
                 c.notes["vlm_error"] = vlm_scores["vlm_error"]
 
             overall = (
-                0.010 * scores["image_quality"]
-                + 0.005 * scores["colorfulness"]
-                + 0.185 * scores["identity_consistency"]
-                + 0.250 * scores["story_alignment"]
+                0.005 * scores["image_quality"]
+                + 0.003 * scores["colorfulness"]
+                + 0.175 * scores["identity_consistency"]
+                + 0.255 * scores["story_alignment"]
                 + 0.235 * scores["event_alignment"]
-                + 0.160 * scores["event_grounding"]
-                + 0.135 * scores["evidence_visibility"]
-                + 0.070 * scores["emotion_visibility"]
-                + 0.045 * scores["emotion_cause_visibility"]
-                + 0.025 * scores["scene_alignment"]
-                + 0.040 * scores["continuity"]
-                + 0.025 * scores["single_scene_score"]
-                + 0.015 * scores["full_body_visibility"]
-                + 0.015 * scores["qa_score"]
+                + 0.155 * scores["event_grounding"]
+                + 0.150 * scores["evidence_visibility"]
+                + 0.060 * scores["emotion_visibility"]
+                + 0.040 * scores["emotion_cause_visibility"]
+                + 0.030 * scores["scene_alignment"]
+                + 0.025 * scores["continuity"]
+                + 0.040 * scores["single_scene_score"]
+                + 0.032 * scores["full_body_visibility"]
+                + 0.020 * scores["qa_score"]
                 + scores["variant_priority"]
                 - scores["duplicate_penalty"]
                 - scores["action_missing_penalty"]
@@ -438,9 +483,8 @@ Return JSON only:
 
             scores["overall"] = round(float(overall), 4)
             c.scores.update(scores)
-            c.notes["v26_selection_reason"] = {
+            c.notes["v27_selection_reason"] = {
                 "story_first_selection": True,
-                "pairwise_selector_disabled": True,
                 "event_action_evidence_first": True,
                 "image_quality_weight_minimal": True,
                 "variant_priority": scores["variant_priority"],
@@ -454,7 +498,7 @@ Return JSON only:
             ranked.append(c)
 
         ranked = sorted(ranked, key=lambda x: x.scores.get("overall", 0.0), reverse=True)
-        # V26: disable the pairwise VLM override. In practice it sometimes overrode the better V19/V20-like candidate.
+        # V27: do not use the pairwise override. It sometimes preferred a prettier but less caption-faithful image.
         return ranked
 
         pairwise = self._vlm_pairwise_select(frame, ranked, is_ending=is_ending)

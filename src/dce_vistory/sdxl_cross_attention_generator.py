@@ -69,11 +69,10 @@ def _spec_from_packet(packet: VisualControlPacket) -> FrameVisualSpec:
 
 class SDXLButterflyCrossAttentionGenerator:
     """
-    Sentence-locked SDXL generator.
+    Caption-locked SDXL generator.
 
-    This version sends direct prompt strings to SDXL. It disables the untrained
-    ButterflyAdapterStack by default because random/untrained adapter tokens can weaken
-    the exact sentence-to-image mapping.
+    This version prioritizes exact frame-caption faithfulness. It sends direct prompt strings
+    to SDXL and keeps the input image as the primary identity anchor.
     """
 
     def __init__(
@@ -96,7 +95,7 @@ class SDXLButterflyCrossAttentionGenerator:
         ip_adapter_repo="h94/IP-Adapter",
         ip_adapter_subfolder="sdxl_models",
         ip_adapter_weight_name="ip-adapter_sdxl.bin",
-        ip_adapter_scale=0.28,
+        ip_adapter_scale=0.35,
         use_butterfly_adapter=False,
     ):
         from diffusers import StableDiffusionXLPipeline
@@ -180,7 +179,7 @@ class SDXLButterflyCrossAttentionGenerator:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         spec = _spec_from_packet(packet)
-        modes = ["event_locked", "evidence_locked", "emotion_causal_locked", "continuity_locked", "composition_locked"]
+        modes = ["caption_locked", "action_object_locked", "scene_locked", "emotion_locked"]
         reference_image, reference_path = self._reference_image_for_packet(packet)
 
         res = []

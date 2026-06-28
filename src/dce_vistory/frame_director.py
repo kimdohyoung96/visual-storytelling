@@ -203,6 +203,50 @@ def _event_visual_inventory(frame: Any, story_row: Dict[str, Any], protagonist: 
     return unique(cleaned, 6)
 
 
+
+
+def _caption_keyword_inventory(*texts: Any) -> List[str]:
+    s = " ".join(clean(t).lower() for t in texts if clean(t))
+    out: List[str] = []
+    def add(*vals):
+        for v in vals:
+            if v:
+                out.append(v)
+    if any(k in s for k in ["꿀", "honey"]):
+        add("honey jar")
+    if any(k in s for k in ["강", "river", "riverbank", "shore", "bank"]):
+        add("riverbank", "water")
+    if any(k in s for k in ["숲", "forest", "woods"]):
+        add("forest", "trees")
+    if any(k in s for k in ["나무", "tree", "trees"]):
+        add("trees")
+    if any(k in s for k in ["하늘", "sky"]):
+        add("sky")
+    if any(k in s for k in ["돌", "stone", "rock"]):
+        add("stone")
+    if any(k in s for k in ["음식", "food"]):
+        add("food")
+    if any(k in s for k in ["앉", "sit", "sits", "sitting"]):
+        add("sitting pose")
+    if any(k in s for k in ["바라", "gaze", "looking at", "stare"]):
+        add("gazing pose")
+    return unique(out, 8)
+
+
+def _exact_caption_text(frame: Any, story_row: Dict[str, Any], fallback: str = "") -> str:
+    for cand in [getattr(frame, "caption_ko", ""), story_row.get("sentence", ""), getattr(frame, "story_sentence", ""), getattr(frame, "caption", ""), fallback]:
+        c = clean(cand)
+        if c:
+            return c
+    return ""
+
+
+def _exact_caption_en_text(frame: Any, story_row: Dict[str, Any], fallback: str = "") -> str:
+    for cand in [getattr(frame, "caption_en", ""), story_row.get("image_sentence", ""), getattr(frame, "image_sentence", ""), fallback]:
+        c = clean(cand)
+        if c:
+            return c
+    return ""
 def build_frame_visual_spec(
     frame: Any,
     seed: Any,
@@ -214,8 +258,9 @@ def build_frame_visual_spec(
     rows = (full_story or {}).get("sentences", []) if isinstance(full_story, dict) else []
     story_row = rows[frame_index] if frame_index < len(rows) and isinstance(rows[frame_index], dict) else {}
 
-    story_sentence = clean(getattr(frame, "image_sentence", "")) or clean(story_row.get("image_sentence") or story_row.get("sentence"))
-    story_sentence = story_sentence or clean(getattr(frame, "story_sentence", "")) or clean(getattr(frame, "caption", ""))
+    exact_caption_ko = _exact_caption_text(frame, story_row, clean(getattr(frame, "caption", "")))
+    exact_caption_en = _exact_caption_en_text(frame, story_row, clean(getattr(frame, "image_sentence", "")))
+    story_sentence = exact_caption_en or exact_caption_ko or clean(getattr(frame, "story_sentence", "")) or clean(getattr(frame, "caption", ""))
 
     protagonist = clean(getattr(seed, "protagonist_visual_short", "")) or clean(getattr(seed, "protagonist", "")) or clean(getattr(frame, "identity_short", "")) or "protagonist"
     subject_identity = _identity_parts(seed, frame)
@@ -229,19 +274,19 @@ def build_frame_visual_spec(
     visual_focus = clean(getattr(frame, "visual_focus", ""))
     camera = clean(getattr(frame, "camera_shot", "")) or clean(getattr(frame, "shot_type", "")) or "medium story shot"
 
-    required = _event_visual_inventory(frame, story_row, protagonist, location)
+    required = unique(_event_visual_inventory(frame, story_row, protagonist, location) + _caption_keyword_inventory(exact_caption_ko, exact_caption_en, event, event_grounding, location), 8)
     neg = _forbidden_for_subject(protagonist, seed, frame)
 
-    prev_sentence = clean(getattr(frame, "previous_story_sentence", ""))
-    prev_image_summary = clean(getattr(frame, "previous_image_summary", ""))
     continuity = "; ".join([
         f"frame {frame_index + 1}/{total_frames}",
         "one single coherent scene only",
         "exactly one protagonist only",
         "same protagonist identity across all frames",
+        "render the exact current frame caption faithfully",
         "follow the current event, not a generic portrait",
-        (f"previous story sentence: {prev_sentence}" if prev_sentence else ""),
-        (f"previous selected image summary: {prev_image_summary}" if prev_image_summary else ""),
+        (f"exact Korean caption: {exact_caption_ko}" if exact_caption_ko else ""),
+        (f"exact English caption: {exact_caption_en}" if exact_caption_en else ""),
+        (f"previous story sentence: {clean(getattr(frame, 'previous_story_sentence', ''))}" if clean(getattr(frame, 'previous_story_sentence', '')) else ""),
     ])
 
     return FrameVisualSpec(
@@ -270,57 +315,65 @@ def build_frame_visual_spec(
     )
 
 
-def prompt_from_spec(spec: FrameVisualSpec, mode: str = "event_locked") -> str:
+def prompt_from_spec(spec: FrameVisualSpec, mode: str = "caption_locked") -> str:
     obj = ", ".join(unique(spec.required_objects, 8))
-    identity = shorten(spec.subject_identity, 55)
-    sentence = shorten(spec.story_sentence, 40)
-    action = shorten(spec.primary_action or spec.visible_event, 24)
-    cause = shorten(spec.visible_cause, 24)
-    loc = shorten(spec.location, 14)
+    identity = shorten(spec.subject_identity, 60)
+    sentence = shorten(spec.story_sentence, 42)
+    action = shorten(spec.primary_action or spec.visible_event, 26)
+    cause = shorten(spec.visible_cause, 26)
+    loc = shorten(spec.location, 16)
     weather = shorten(spec.weather, 8)
     atmosphere = shorten(spec.atmosphere, 12)
-    face = shorten(spec.facial_expression, 16)
+    face = shorten(spec.facial_expression, 18)
     body = shorten(spec.body_pose, 18)
     camera = shorten(spec.camera, 18)
-    continuity = shorten(spec.continuity, 50)
+    continuity = shorten(spec.continuity, 70)
+
+    checklist = (
+        f"Mandatory checklist: exactly one {spec.protagonist}; current action `{action}` clearly visible; "
+        f"current evidence/cause `{cause}` visible; grounded objects `{obj}` only; "
+        f"location `{loc}` visible; emotion `{spec.emotion}` visible; no unrelated characters or props."
+    )
 
     base = (
         f"full-color cinematic storybook illustration. frame {spec.frame_id}/{spec.total_frames}. "
-        f"Generate one single coherent scene only. "
-        f"Show exactly one {spec.protagonist}; no second protagonist and no extra characters. "
-        f"Keep the same protagonist identity as the input image: {identity}. "
-        f"Current story sentence: {sentence}. "
-        f"Main visible action: {action}. "
+        f"Render the exact current frame caption faithfully, as one single coherent scene. "
+        f"Do not replace the caption with a generic portrait or a symbolic unrelated scene. "
+        f"Use a medium-wide or full-body shot with safe margins so the protagonist is not cropped. "
+        f"EXACTLY ONE {spec.protagonist} in the whole image; no second {spec.protagonist}; no duplicate protagonist; no extra humans; no extra animals. "
+        f"Subject identity anchor: {identity}. "
+        f"Exact frame caption / sentence: {sentence}. "
+        f"Main visible event/action: {action}. "
         f"Visible cause or evidence: {cause}. "
-        f"Allowed grounded inventory only: {obj}. "
+        f"Required grounded objects/background only: {obj}. "
         f"Location: {loc}; weather: {weather}; atmosphere: {atmosphere}. "
-        f"Emotion: {spec.emotion}; face: {face}; body pose: {body}. "
-        f"Camera/composition: {camera}. "
+        f"Emotion: {spec.emotion}; face: {face}; body pose: {body}. camera: {camera}. "
+        f"{checklist} "
         f"Continuity guidance: {continuity}. "
-        f"Prefer a readable medium or medium-wide story shot that clearly shows the protagonist, action, and evidence. "
-        f"Do not invent unrelated props or background objects. "
-        f"Do not turn continuity into duplicated subjects. "
+        f"Never show forbidden items: {', '.join(unique(spec.forbidden_objects, 12))}. "
     )
 
-    if mode == "event_locked":
-        extra = "Prioritize the current event and the required grounded objects."
-    elif mode == "evidence_locked":
-        extra = "Make the causal evidence clearly visible and easy to understand."
-    elif mode == "emotion_causal_locked":
-        extra = f"Make the viewer understand why the protagonist feels {spec.emotion} from the scene."
-    elif mode == "continuity_locked":
-        extra = "Keep identity and world continuity, but the pose and action must change to the current story step."
+    if mode == "caption_locked":
+        extra = "Primary priority: match the exact frame caption and current event. Every major visible element must support the caption."
+    elif mode == "action_object_locked":
+        extra = "Primary priority: make the action and required object/evidence immediately readable at first glance."
+    elif mode == "scene_locked":
+        extra = "Primary priority: the location and world context must match the caption while still showing the current action."
+    elif mode == "emotion_locked":
+        extra = f"Primary priority: the viewer should understand why the protagonist feels {spec.emotion} from the visible event and scene."
     else:
-        extra = "Keep the frame concrete, grounded, and easy to read."
+        extra = "Keep the frame concrete, story-faithful, and easy to read in a single glance."
     return clean(base + " " + extra)
 
 
 def negative_from_spec(spec: FrameVisualSpec) -> str:
     return clean(
         "split screen, diptych, triptych, comic panel, storyboard sheet, collage, multiple scenes in one image, "
-        "duplicate protagonist, second protagonist, extra character, extra animal, unrelated humans, human face, "
-        "wrong protagonist identity, wrong species, wrong fur color, different identity, "
-        "generic portrait, repeated static pose, missing protagonist, missing action, missing event, missing evidence, "
-        "missing required object, unrelated object, unrelated prop, text, watermark, low quality, blurry, "
+        "cropped head, cropped face, cropped feet, cut off body, partial body, out of frame, extreme close-up, "
+        "duplicate protagonist, second protagonist, two protagonists, two bears, multiple bears, extra bear, baby bear, bear cub, small bear, "
+        "extra character, extra animal, unrelated humans, person, man, woman, child, human face, "
+        "generic portrait, repeated static pose, unrelated poster image, missing protagonist, wrong protagonist, wrong species, wrong fur color, "
+        "childlike body, different identity, inconsistent character, missing action, missing event, missing evidence, "
+        "missing required object, cropped out props, wrong background, wrong weather, unrelated object, unrelated prop, text, watermark, low quality, blurry, "
         + spec.negative
     )
