@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Tuple
 import torch
 from PIL import Image
 
@@ -23,23 +23,24 @@ def _load_rgb_image(path: str, size=(1024, 1024)):
     img.thumbnail(size)
     return img
 
+
 def _combine_reference_images(paths: List[str], size=(1024, 1024)):
     valid = [str(p) for p in paths if _path_exists(p)]
     if not valid:
-        return None, ''
+        return None, ""
     imgs = [_load_rgb_image(p, size=(size[0] // max(1, min(3, len(valid))), size[1])) for p in valid[:3]]
     if len(imgs) == 1:
         return imgs[0], valid[0]
     cols = len(imgs)
     w = max(1, size[0] // cols)
-    canvas = Image.new('RGB', size, 'white')
+    canvas = Image.new("RGB", size, "white")
     for i, img in enumerate(imgs):
         local = img.copy()
         local.thumbnail((w - 8, size[1] - 8))
         x0 = i * w + (w - local.width) // 2
         y0 = (size[1] - local.height) // 2
         canvas.paste(local, (x0, y0))
-    return canvas, ' | '.join(valid[:3])
+    return canvas, " | ".join(valid[:3])
 
 
 def _spec_from_packet(packet: VisualControlPacket) -> FrameVisualSpec:
@@ -75,11 +76,14 @@ def _spec_from_packet(packet: VisualControlPacket) -> FrameVisualSpec:
 
 class SDXLButterflyCrossAttentionGenerator:
     """
-    Sentence-locked SDXL generator.
+    V30 story-faithful generator.
 
-    This version sends direct prompt strings to SDXL. It disables the untrained
-    ButterflyAdapterStack by default because random/untrained adapter tokens can weaken
-    the exact sentence-to-image mapping.
+    Improvements over V29:
+    - English caption contract only
+    - optional SDXL refiner stage for higher quality images
+    - stronger prompt pair construction
+    - stronger composition constraints for uncropped readable storytelling frames
+    - optional alternative diffusion backbone through model_id/config without changing pipeline logic
     """
 
     def __init__(
@@ -104,8 +108,13 @@ class SDXLButterflyCrossAttentionGenerator:
         ip_adapter_weight_name="ip-adapter_sdxl.bin",
         ip_adapter_scale=0.22,
         use_butterfly_adapter=False,
+        use_refiner=True,
+        refiner_model_id="stabilityai/stable-diffusion-xl-refiner-1.0",
+        refiner_strength=0.80,
+        aesthetic_score=6.0,
+        negative_aesthetic_score=2.5,
     ):
-        from diffusers import StableDiffusionXLPipeline
+        from diffusers import StableDiffusionXLPipeline, StableDiffusionXLImg2ImgPipeline, DPMSolverMultistepScheduler
 
         self.device = device
         self.width = int(width)
@@ -115,12 +124,17 @@ class SDXLButterflyCrossAttentionGenerator:
         self.seed = int(seed)
         self.dtype = torch.float16 if device.startswith("cuda") else torch.float32
         self.use_butterfly_adapter = bool(use_butterfly_adapter and adapter_ckpt)
+        self.use_refiner = bool(use_refiner and device.startswith("cuda"))
+        self.refiner_strength = float(refiner_strength)
+        self.aesthetic_score = float(aesthetic_score)
+        self.negative_aesthetic_score = float(negative_aesthetic_score)
 
         self.pipe = StableDiffusionXLPipeline.from_pretrained(
             model_id,
             torch_dtype=self.dtype,
             use_safetensors=True,
         )
+        self.pipe.scheduler = DPMSolverMultistepScheduler.from_config(self.pipe.scheduler.config, use_karras_sigmas=True)
         if enable_cpu_offload and device.startswith("cuda"):
             self.pipe.enable_model_cpu_offload()
         else:
@@ -128,8 +142,30 @@ class SDXLButterflyCrossAttentionGenerator:
 
         try:
             self.pipe.vae.enable_slicing()
+            self.pipe.vae.enable_tiling()
         except Exception:
             pass
+
+        self.refiner = None
+        self.refiner_error = ""
+        if self.use_refiner:
+            try:
+                self.refiner = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                    refiner_model_id,
+                    text_encoder_2=self.pipe.text_encoder_2,
+                    vae=self.pipe.vae,
+                    torch_dtype=self.dtype,
+                    use_safetensors=True,
+                )
+                self.refiner.scheduler = DPMSolverMultistepScheduler.from_config(self.refiner.scheduler.config, use_karras_sigmas=True)
+                if enable_cpu_offload and device.startswith("cuda"):
+                    self.refiner.enable_model_cpu_offload()
+                else:
+                    self.refiner.to(device)
+            except Exception as e:
+                self.refiner = None
+                self.refiner_error = str(e)[:500]
+                self.use_refiner = False
 
         self.ip_adapter_loaded = False
         self.ip_adapter_error = ""
@@ -164,7 +200,6 @@ class SDXLButterflyCrossAttentionGenerator:
     def _reference_image_for_packet(self, packet):
         refs = getattr(packet, "reference_images", {}) or {}
         paths = []
-        # V29 protagonist-only identity policy: prefer only the source/subject reference image.
         if refs.get("subject"):
             paths.append(refs.get("subject"))
         if not paths:
@@ -181,7 +216,65 @@ class SDXLButterflyCrossAttentionGenerator:
         img, desc = _combine_reference_images(paths[:1], size=(1024, 1024))
         if img is not None:
             return img, desc
-        return None, ''
+        return None, ""
+
+    def _build_prompt_pair(self, spec: FrameVisualSpec, mode: str) -> Tuple[str, str, str]:
+        main_prompt = prompt_from_spec(spec, mode)
+        compact_prompt_2 = (
+            f"one protagonist only; {spec.protagonist}; "
+            f"action: {spec.primary_action or spec.visible_event}; "
+            f"evidence: {spec.visible_cause}; "
+            f"location: {spec.location}; emotion: {spec.emotion}; "
+            f"required objects: {', '.join(spec.required_objects[:8])}"
+        )
+        negative_prompt = negative_from_spec(spec)
+        return main_prompt, compact_prompt_2, negative_prompt
+
+    def _run_base(self, prompt: str, prompt_2: str, negative_prompt: str, generator, reference_image=None):
+        kwargs = dict(
+            prompt=prompt,
+            prompt_2=prompt_2,
+            negative_prompt=negative_prompt,
+            negative_prompt_2=negative_prompt,
+            width=self.width,
+            height=self.height,
+            num_inference_steps=self.num_inference_steps,
+            guidance_scale=self.guidance_scale,
+            generator=generator,
+            aesthetic_score=self.aesthetic_score,
+            negative_aesthetic_score=self.negative_aesthetic_score,
+        )
+        used_reference = False
+        if self.ip_adapter_loaded and reference_image is not None:
+            try:
+                self.pipe.set_ip_adapter_scale(self.ip_adapter_scale)
+            except Exception:
+                pass
+            kwargs["ip_adapter_image"] = reference_image
+            used_reference = True
+
+        if self.use_refiner and self.refiner is not None:
+            latent = self.pipe(
+                **kwargs,
+                output_type="latent",
+                denoising_end=self.refiner_strength,
+            ).images
+            image = self.refiner(
+                prompt=prompt,
+                prompt_2=prompt_2,
+                negative_prompt=negative_prompt,
+                negative_prompt_2=negative_prompt,
+                image=latent,
+                num_inference_steps=max(20, self.num_inference_steps),
+                denoising_start=self.refiner_strength,
+                guidance_scale=max(5.5, self.guidance_scale - 1.0),
+                generator=generator,
+                aesthetic_score=self.aesthetic_score,
+                negative_aesthetic_score=self.negative_aesthetic_score,
+            ).images[0]
+        else:
+            image = self.pipe(**kwargs).images[0]
+        return image, used_reference
 
     @torch.no_grad()
     def generate_from_packet(
@@ -200,34 +293,12 @@ class SDXLButterflyCrossAttentionGenerator:
         res = []
         for cid in range(num_candidates):
             mode = modes[cid % len(modes)]
-            prompt = prompt_from_spec(spec, mode)
-            negative_prompt = negative_from_spec(spec)
+            prompt, prompt_2, negative_prompt = self._build_prompt_pair(spec, mode)
 
             sd = self.seed + int(frame_id) * 1000 + cid
             gen = torch.Generator(device=self.device).manual_seed(sd) if self.device.startswith("cuda") else torch.Generator().manual_seed(sd)
 
-            kwargs = dict(
-                prompt=prompt,
-                prompt_2=prompt,
-                negative_prompt=negative_prompt,
-                negative_prompt_2=negative_prompt,
-                width=self.width,
-                height=self.height,
-                num_inference_steps=self.num_inference_steps,
-                guidance_scale=self.guidance_scale,
-                generator=gen,
-            )
-
-            used_reference = False
-            if self.ip_adapter_loaded and reference_image is not None:
-                try:
-                    self.pipe.set_ip_adapter_scale(self.ip_adapter_scale)
-                except Exception:
-                    pass
-                kwargs["ip_adapter_image"] = reference_image
-                used_reference = True
-
-            img = self.pipe(**kwargs).images[0]
+            img, used_reference = self._run_base(prompt, prompt_2, negative_prompt, gen, reference_image=reference_image)
             path = out_dir / f"frame_{int(frame_id):03d}_cand_{cid:02d}.png"
             img.save(path)
 
@@ -257,13 +328,17 @@ class SDXLButterflyCrossAttentionGenerator:
                         "seed": sd,
                         "prompt_variant_mode": mode,
                         "caption_locked_generation": True,
-                        "untrained_butterfly_adapter_disabled": not self.use_butterfly_adapter,
+                        "english_caption_contract": True,
+                        "story_faithful_generation": True,
                         "reference_image_path": reference_path,
                         "ip_adapter_loaded": self.ip_adapter_loaded,
                         "ip_adapter_used": used_reference,
                         "ip_adapter_scale": self.ip_adapter_scale,
                         "ip_adapter_error": self.ip_adapter_error,
+                        "refiner_enabled": self.use_refiner,
+                        "refiner_error": self.refiner_error,
                         "frame_visual_spec": spec.to_dict(),
+                        "prompt_2": prompt_2,
                         "negative_prompt": negative_prompt,
                     },
                 )

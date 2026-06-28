@@ -128,10 +128,10 @@ def _frame_tifa_questions(frame: Any) -> List[str]:
 def _bad_extra_subject_penalty(caption: str) -> float:
     cap = str(caption or '').lower()
     penalty = 0.0
-    if re.search(r'\bperson\b|\bman\b|\bwoman\b|\bchild\b|\bboy\b|\bgirl\b|\bhuman\b', cap):
-        penalty += 0.45
-    if re.search(r'\btwo\b|\bthree\b|\bgroup\b|\bcrowd\b|\bmultiple\b|\bseveral\b', cap):
-        penalty += 0.25
+    if re.search(r'\bperson\b|\bman\b|\bwoman\b|\bchild\b|\bboy\b|\bgirl\b|\bhuman\b|\bpeople\b|\bcrowd\b', cap):
+        penalty += 0.50
+    if re.search(r'\btwo\b|\bthree\b|\bgroup\b|\bcrowd\b|\bmultiple\b|\bseveral\b|\bpair\b', cap):
+        penalty += 0.30
     if re.search(r'\bportrait\b|\bclose[- ]?up\b', cap):
         penalty += 0.10
     return min(0.70, penalty)
@@ -280,7 +280,7 @@ All scores must be 0 to 1.
                 overall += 0.02 * scores['emotion_visibility']
             scores['overall'] = round(float(overall), 4)
             c.scores.update(scores)
-            c.notes['v29_selection_reason'] = {'caption_is_primary_contract': True, 'extra_subject_penalty': scores.get('bad_extra_subject_penalty', 0.0), 'story_event_evidence_first': True, 'single_protagonist_priority': True}
+            c.notes['v30_selection_reason'] = {'caption_is_primary_contract': True, 'extra_subject_penalty': scores.get('bad_extra_subject_penalty', 0.0), 'story_event_evidence_first': True, 'single_protagonist_priority': True}
             ranked.append(c)
         return sorted(ranked, key=lambda x: x.scores.get('overall', 0.0), reverse=True)
 

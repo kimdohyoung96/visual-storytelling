@@ -154,6 +154,11 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             emotion_tokens=int(ad_cfg.get("emotion_tokens", 8)),
             event_tokens=int(ad_cfg.get("event_tokens", 8)),
             evidence_tokens=int(ad_cfg.get("evidence_tokens", 8)),
+            use_refiner=bool(img_cfg.get("use_refiner", True)),
+            refiner_model_id=img_cfg.get("refiner_model_id", "stabilityai/stable-diffusion-xl-refiner-1.0"),
+            refiner_strength=float(img_cfg.get("refiner_strength", 0.80)),
+            aesthetic_score=float(img_cfg.get("aesthetic_score", 6.0)),
+            negative_aesthetic_score=float(img_cfg.get("negative_aesthetic_score", 2.5)),
         )
 
     def _strengthen_packet(self, packet, frame):
@@ -197,11 +202,13 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         generation_policy = {
-            "version": "V29",
-            "mode": "v20_caption_grounded_protagonist_only_rescue",
+            "version": "V30",
+            "mode": "v30_english_caption_grounded_sdxl_refiner_storyfaith",
             "protagonist_only": True,
             "no_secondary_characters": True,
             "training_free_consistency_removed": True,
+            "english_only_text_generation": True,
+            "sdxl_refiner_enabled": bool(self.cfg.get("image_generator", {}).get("use_refiner", True)),
             "caption_is_image_contract": True,
             "multi_candidate_generation_restored": True,
             "cleanup_stale_candidates": True,
@@ -215,9 +222,9 @@ class CrossAttentionButterflyDCEViStoryPipeline:
                 "visible cause/evidence"
             ],
             "blocked_story_entities": getattr(seed, "forbidden_ungrounded_entities", []),
-            "reason": "V29 keeps the V20 caption-grounded pipeline, strengthens protagonist-only story generation, and adds a stricter story-faithful rescue loop."
+            "reason": "V30 keeps the DCEE protagonist-only pipeline, forces English caption contracts, and upgrades SDXL generation with a stronger story-faithful prompt policy and optional refiner stage."
         }
-        _write_json(out_dir / "generation_policy_V29.json", generation_policy)
+        _write_json(out_dir / "generation_policy_V30.json", generation_policy)
         total_frames = int(sample.get("num_frames", 6))
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, total_frames)
 
@@ -374,7 +381,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "storyboard": str(out_dir / "storyboard.json"),
             "full_story": str(out_dir / "full_story.json"),
             "dcee_plan": str(out_dir / "dcee_plan.json"),
-            "generation_policy_V28": str(out_dir / "generation_policy_V28.json"),
+            "generation_policy_V30": str(out_dir / "generation_policy_V30.json"),
             "has_contact_sheet": (out_dir / "contact_sheet.png").exists(),
             "num_selected_images": len(selected_images),
         })

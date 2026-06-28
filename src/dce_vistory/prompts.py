@@ -9,7 +9,8 @@ Never import characters, occupations, props, or scenes from unrelated example st
 If JSON is requested, return concise valid JSON only.
 Core structure: Desire -> Conflict -> Event Chain -> Ending Emotion (DCEE).
 
-V29 POLICY:
+V30 POLICY:
+- All generated text fields must be in English.
 - Protagonist-only visual storytelling is the default.
 - The story must center on the protagonist only.
 - Do not create secondary characters, animal friends, villagers, humans, helpers, enemies, woodcutters, fairies, or crowds unless the user explicitly provides them in input.
@@ -218,11 +219,12 @@ def next_story_sentence_prompt(seed: dict, dce_plan: dict, emotion_arc: dict, st
             intens = intensities[frame_index]
 
     return f"""
-Generate ONLY the next protagonist-centered caption for frame {frame_index+1} of {num_frames}.
-The output caption will be used directly for image generation, so it must be visually concrete, single-scene, and protagonist-only.
+Generate ONLY the next protagonist-centered frame description in English for frame {frame_index+1} of {num_frames}.
+The output sentence will be used directly for image generation, so it must be visually concrete, single-scene, story-faithful, and protagonist-only.
 
 Grounding rules:
-- Use only grounded entities from the seed and previous story.
+- All output text must be English.
+- Use only grounded entities from the seed, current DCEE plan, and previous story.
 - Forbidden ungrounded entities: {forbidden_entities}
 - protagonist_only = {protagonist_only}
 - The protagonist is the only character/agent allowed in the story.
@@ -231,9 +233,10 @@ Grounding rules:
 - The sentence must naturally continue story_so_far.
 - Each frame must be one single scene with one main visible action.
 - Conflict must come from environment, object state, search, movement, weather, distance, obstacle, loss, or internal emotion.
-- If the caption mentions an object, that object must be concrete and drawable.
+- If the sentence mentions an object, that object must be concrete, grounded, and drawable.
 - If the object is not grounded in input/seed/story history, do not mention it.
 - Keep the frame easy to draw: one protagonist, one action, one place, one emotional cue.
+- Prefer literal, visually specific wording over abstract narration.
 
 Allowed visual elements:
 - protagonist
@@ -245,15 +248,15 @@ sentence, image_caption_en, subject, action, action_en, object, location, locati
 visible_cause, visible_cause_en, required_objects, required_objects_en, background_elements, background_elements_en, supporting_cast, continuity_notes.
 
 Strict output rules:
-- sentence must be a Korean caption for the frame.
-- image_caption_en must be a direct English image-generation caption for exactly the same content as sentence.
+- sentence must be an English frame caption.
+- image_caption_en must be the same English frame caption, rewritten only if needed for cleaner image generation.
 - subject must be the protagonist only.
 - supporting_cast must be [].
 - sentence and image_caption_en must contain exactly one protagonist and exactly one primary visible action by the protagonist.
 - sentence and image_caption_en must include one concrete place/background.
 - required_objects / required_objects_en must contain only visible props/background objects required by this exact caption.
 - background_elements / background_elements_en must contain only visible scene elements required by this exact caption.
-- do not include humans, children, extra animals, reflections that look like another protagonist, or a second protagonist in required_objects.
+- do not include humans, children, extra animals, reflections that look like another protagonist, or a second protagonist in any field.
 - prefer full-body or medium-wide situations that are easy to render as a story frame.
 - frame emotion target: {target_emotion}
 - frame emotion intensity target: {intens}
@@ -348,7 +351,7 @@ def frame_prompt(frame: dict, dce_plan: dict, emotion_arc: dict, memory: dict, s
     caption = frame.get('image_caption_en') or frame.get('image_sentence') or frame.get('story_sentence') or frame.get('caption')
     return f"""
 {style}, full-color cinematic storybook illustration.
-V28 CAPTION-GROUNDED RENDERING RULES:
+V30 ENGLISH CAPTION-GROUNDED RENDERING RULES:
 - Render the exact frame caption as one single coherent image.
 - The caption is the primary contract; do not replace it with a generic portrait or unrelated scene.
 - Show exactly one protagonist and no secondary characters.
@@ -357,7 +360,7 @@ V28 CAPTION-GROUNDED RENDERING RULES:
 - Use the input-image protagonist identity consistently.
 - Prefer medium or medium-wide composition that shows protagonist action, required object, and background.
 Exact frame caption: {caption}
-Korean story sentence: {frame.get('story_sentence') or frame.get('caption')}
+Story sentence: {frame.get('story_sentence') or frame.get('caption')}
 Visible protagonist action: {frame.get('event')}
 Visible cause/evidence: {frame.get('event_grounding')}
 Allowed visual inventory only: {frame.get('must_show') or frame.get('key_objects')}

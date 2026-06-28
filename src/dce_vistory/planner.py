@@ -65,6 +65,17 @@ def _clean_text(x: Any) -> str:
     return re.sub(r"\s+", " ", str(x or "")).strip()
 
 
+def _contains_hangul(text: Any) -> bool:
+    return bool(re.search(r"[\uac00-\ud7a3]", str(text or "")))
+
+
+def _looks_non_english(text: Any) -> bool:
+    s = _clean_text(text)
+    if not s:
+        return False
+    return _contains_hangul(s)
+
+
 def _string_list(value: Any) -> List[str]:
     if value is None:
         return []
@@ -348,6 +359,53 @@ class DCEPlanner:
         self.temperature = temperature
         self.max_tokens = min(int(max_tokens), 1800)
 
+    def _translate_text_to_english(self, text: Any, short: bool = False) -> str:
+        s = _clean_text(text)
+        if not s:
+            return ""
+        if not _looks_non_english(s):
+            return s
+        instruction = "Translate the following text into concise natural English. Return plain English text only. Preserve the original meaning and visible scene details."
+        if short:
+            instruction += " Keep it short."
+        try:
+            out = self._llm_text(f"{instruction}\n\nInput: {s}", max_tokens=120 if short else 260, temperature=0.0)
+            out = _clean_text(out)
+            return out or s
+        except Exception:
+            return s
+
+    def _translate_list_to_english(self, items: Any, short: bool = True) -> List[str]:
+        out: List[str] = []
+        for item in _string_list(items):
+            val = self._translate_text_to_english(item, short=short)
+            if val and val not in out:
+                out.append(val)
+        return out
+
+    def _ensure_story_step_english(self, data: Dict[str, Any], protagonist: str) -> Dict[str, Any]:
+        data = dict(data or {})
+        text_fields = [
+            "sentence", "image_caption_en", "image_sentence", "subject", "action", "action_en", "object",
+            "location", "location_en", "weather", "atmosphere", "emotion", "visible_cause",
+            "visible_cause_en", "continuity_notes"
+        ]
+        for key in text_fields:
+            if key in data and data.get(key) not in [None, ""]:
+                data[key] = self._translate_text_to_english(data.get(key), short=(key not in {"sentence", "image_caption_en", "continuity_notes"}))
+        for key in ["required_objects", "required_objects_en", "background_elements", "background_elements_en", "supporting_cast", "characters"]:
+            if key in data:
+                data[key] = self._translate_list_to_english(data.get(key), short=True)
+        # Keep one clean English caption contract
+        sentence = _clean_text(data.get("image_caption_en") or data.get("sentence"))
+        if sentence:
+            data["sentence"] = sentence
+            data["image_caption_en"] = sentence
+            data["image_sentence"] = sentence
+        sub = _clean_text(data.get("subject") or protagonist)
+        data["subject"] = self._translate_text_to_english(sub, short=True)
+        return data
+
     def _llm_text(self, prompt: str, max_tokens: int | None = None, temperature: float | None = None) -> str:
         text = self.llm.generate(
             SYSTEM_NARRATIVE,
@@ -434,6 +492,7 @@ class DCEPlanner:
         forbidden = getattr(seed, "forbidden_ungrounded_entities", []) or []
         text = self._llm_text(story_abstract_prompt(_to_dict(seed), forbidden, protagonist_only=True), max_tokens=500, temperature=0.35)
         text = _replace_forbidden_text(text, forbidden, getattr(seed, "protagonist", "protagonist"))
+        text = self._translate_text_to_english(text)
         if not _clean_text(text):
             raise RuntimeError("Abstract is empty.")
         return text
@@ -533,6 +592,7 @@ class DCEPlanner:
         protagonist = getattr(seed, "protagonist", "protagonist")
         data = _sanitize_nested(data, forbidden + list(_AGENT_WORDS), protagonist)
         data = _force_protagonist_only_step(data, protagonist)
+        data = self._ensure_story_step_english(data, protagonist)
 
         data["frame_id"] = frame_index + 1
         data["sentence"] = _clean_text(data.get("sentence"))
@@ -551,7 +611,8 @@ class DCEPlanner:
         data["required_objects"] = _derive_required_objects(data, seed, protagonist)
         data["background_elements"] = _derive_background_elements(data, seed, protagonist)
         data["supporting_cast"] = []
-        data["characters"] = [protagonist]
+        data["characters"] = [self._translate_text_to_english(protagonist, short=True)]
+        data["subject"] = self._translate_text_to_english(protagonist, short=True)
         if _caption_mentions_extra_agent(data.get("sentence", ""), protagonist) or _caption_mentions_extra_agent(data.get("image_caption_en", ""), protagonist):
             raise RuntimeError(f"Frame {frame_index+1} caption still contains a secondary agent after protagonist-only enforcement.")
         return data
@@ -585,7 +646,8 @@ class DCEPlanner:
             "story_sentence": step.get("sentence", ""),
             "image_sentence": step.get("image_caption_en", step.get("image_sentence", step.get("sentence", ""))),
             "image_caption_en": step.get("image_caption_en", step.get("image_sentence", step.get("sentence", ""))),
-            "caption_ko": step.get("sentence", ""),
+            "caption_en": step.get("sentence", ""),
+            "caption_ko": "",
             "event_causal_role": "visible story event",
             "event_grounding": step.get("visible_cause", ""),
             "emotion_evidence": _string_list(step.get("required_objects"))[:4],

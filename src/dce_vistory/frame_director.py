@@ -36,6 +36,32 @@ def shorten(text: str, max_words: int = 18) -> str:
     return " ".join(words[:max_words])
 
 
+_AGENT_TERMS = {"person", "man", "woman", "boy", "girl", "child", "human", "friend", "helper", "companion", "sidekick", "crowd", "another bear", "other bear", "another panda", "other panda"}
+
+
+def _is_forbidden_entity_term(text: Any, protagonist: str) -> bool:
+    s = clean(text).lower()
+    if not s:
+        return False
+    p = clean(protagonist).lower()
+    if s == p or s in {"protagonist", "main character", "subject"}:
+        return True
+    return any(t in s for t in _AGENT_TERMS)
+
+
+def _filter_visual_inventory(items: List[str], protagonist: str, limit: int = 10) -> List[str]:
+    out: List[str] = []
+    for item in items:
+        s = clean(item)
+        if not s:
+            continue
+        if _is_forbidden_entity_term(s, protagonist):
+            continue
+        if s not in out:
+            out.append(s)
+    return out[:limit]
+
+
 @dataclass
 class FrameVisualSpec:
     frame_id: int
@@ -122,21 +148,17 @@ def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | 
     if isinstance(story_bible, dict) and story_bible.get('subject_identity_prompt'):
         subject_identity = story_bible.get('subject_identity_prompt') + '; ' + subject_identity
 
-    required_objects = unique(
+    required_objects = _filter_visual_inventory(unique(
         as_list(story_row.get('required_objects', []))
-        + as_list(story_row.get('subject', ''))
+        + as_list(story_row.get('required_objects_en', []))
         + as_list(story_row.get('object', ''))
-        + extract_entity_candidates(story_sentence)
         + as_list(getattr(frame, 'key_objects', []))
         + as_list(getattr(frame, 'evidence_objects', []))
         + as_list(getattr(frame, 'emotion_evidence', []))
         + as_list(getattr(frame, 'must_show', []))
-        + as_list(graph_hints.get('current_entities', []))
-        + as_list(graph_hints.get('carry_over_entities', []))
-        + as_list(graph_hints.get('recurring_entities', []))
         + as_list((bible_world or {}).get('stable_background', [])),
         14,
-    )
+    ), protagonist, 10)
 
     emotion = clean(story_row.get('emotion')) or clean(getattr(frame, 'emotion', ''))
     bible_emotion = emotion_cue_from_bible(story_bible, emotion) if story_bible else {}
@@ -167,6 +189,7 @@ def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | 
         'visualize only this story sentence',
         'same protagonist identity across all frames',
         'advance the story instead of repeating the previous pose',
+        'the current frame must visually realize the current caption more strongly than any earlier frame',
     ]
     if carry_over:
         continuity_parts.append('carry over entities: ' + ', '.join(carry_over))
@@ -205,42 +228,44 @@ def build_frame_visual_spec(frame: Any, seed: Any, full_story: Dict[str, Any] | 
 
 
 def prompt_from_spec(spec: FrameVisualSpec, mode: str = 'caption_locked') -> str:
-    obj = ', '.join(unique(spec.required_objects, 10))
+    obj = ', '.join(unique(spec.required_objects, 10)) or 'only grounded story objects'
     carry = ', '.join(unique(spec.carry_over_entities, 5))
     recurring = ', '.join(unique(spec.recurring_entities, 5))
-    identity = shorten(spec.subject_identity, 38)
-    sentence = shorten(spec.story_sentence, 42)
-    action = shorten(spec.primary_action or spec.visible_event, 20)
-    cause = shorten(spec.visible_cause, 20)
-    loc = shorten(spec.location, 16)
-    weather = shorten(spec.weather, 8)
-    atmosphere = shorten(spec.atmosphere, 10)
-    face = shorten(spec.facial_expression, 14)
-    body = shorten(spec.body_pose, 16)
-    camera = shorten(spec.camera, 18)
+    identity = shorten(spec.subject_identity, 42)
+    sentence = shorten(spec.story_sentence, 48)
+    action = shorten(spec.primary_action or spec.visible_event, 24)
+    cause = shorten(spec.visible_cause, 24)
+    loc = shorten(spec.location, 18)
+    weather = shorten(spec.weather, 10) or 'story-appropriate weather'
+    atmosphere = shorten(spec.atmosphere, 12) or 'story-appropriate atmosphere'
+    face = shorten(spec.facial_expression, 16)
+    body = shorten(spec.body_pose, 18)
+    camera = shorten(spec.camera, 20)
 
     base = (
-        f'full-color cinematic storybook illustration. frame {spec.frame_id}/{spec.total_frames}. '
-        f'render one single coherent scene for this exact story frame. '
-        f'exact frame caption: {sentence}. '
-        f'exactly one visible protagonist only: {spec.protagonist}. no secondary characters, no companion, no helper, no other animal, no human. '
-        f'keep the same protagonist identity across all frames: {identity}. '
-        f'show the protagonist full-body or medium-wide when possible, with face, paws/feet, and main action clearly visible and uncropped. '
-        f'main visible action: {action}. visible cause/evidence: {cause}. '
-        f'only these required visual elements may appear: {obj}. '
-        f'scene/location: {loc}; weather: {weather}; mood: {atmosphere}. '
-        f'emotion: {spec.emotion}; face: {face}; body: {body}. camera/composition: {camera}. '
-        f'no unrelated object, no multi-panel layout, no split scene, no poster-like portrait. '
+        f'professional full-color cinematic storybook illustration. '
+        f'visual storytelling frame {spec.frame_id} of {spec.total_frames}. '
+        f'caption-locked rendering: {sentence}. '
+        f'exactly one protagonist only: {spec.protagonist}. '
+        f'do not show any second person, second animal, duplicate protagonist, crowd, or helper. '
+        f'keep protagonist identity consistent across frames: {identity}. '
+        f'show a readable single scene with the protagonist full body or medium-wide when possible; face, limbs, and main prop must remain visible and uncropped. '
+        f'current visible action: {action}. visible cause or evidence: {cause}. '
+        f'only grounded visual elements may appear: {obj}. '
+        f'place/background: {loc}. weather: {weather}. atmosphere: {atmosphere}. '
+        f'emotion: {spec.emotion}. facial expression: {face}. body pose: {body}. '
+        f'camera/composition: {camera}. '
+        f'render a story frame, not a portrait poster, not a collage, and not a generic pose. '
     )
 
     if mode == 'evidence_locked':
-        extra = f'all listed required objects and event evidence must be visible. show why the protagonist is doing the action. keep only these carry-over entities if still relevant: {carry}.'
+        extra = f'all listed required objects and visual evidence must be clearly visible in the same frame. show why the protagonist is doing the action. keep only these carry-over entities if still relevant: {carry}.'
     elif mode == 'continuity_locked':
-        extra = f'keep protagonist identity and world continuity, but the current caption and current action are more important than previous frames. recurring story entities allowed only if listed: {recurring}.'
+        extra = f'preserve protagonist identity and world continuity, but the current caption and current action are more important than previous frames. recurring story entities allowed only if explicitly listed: {recurring}.'
     elif mode == 'emotion_locked':
-        extra = f'the viewer must immediately understand why the protagonist feels {spec.emotion}; the emotional cause and required objects must be visible in the same scene.'
+        extra = f'the viewer must immediately understand why the protagonist feels {spec.emotion}; emotional cause and required evidence must be visible in the same scene.'
     else:
-        extra = 'caption locking is mandatory: visualize this exact caption, not a generic portrait and not an unrelated moment.'
+        extra = 'caption locking is mandatory: visualize this exact caption, not a generic portrait, not an unrelated moment, and not an earlier or later event.'
     return clean(base + ' ' + extra)
 
 
