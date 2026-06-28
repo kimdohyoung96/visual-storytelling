@@ -232,12 +232,16 @@ def build_frame_visual_spec(
     required = _event_visual_inventory(frame, story_row, protagonist, location)
     neg = _forbidden_for_subject(protagonist, seed, frame)
 
+    prev_sentence = clean(getattr(frame, "previous_story_sentence", ""))
+    prev_image_summary = clean(getattr(frame, "previous_image_summary", ""))
     continuity = "; ".join([
         f"frame {frame_index + 1}/{total_frames}",
         "one single coherent scene only",
         "exactly one protagonist only",
         "same protagonist identity across all frames",
         "follow the current event, not a generic portrait",
+        (f"previous story sentence: {prev_sentence}" if prev_sentence else ""),
+        (f"previous selected image summary: {prev_image_summary}" if prev_image_summary else ""),
     ])
 
     return FrameVisualSpec(
@@ -267,53 +271,56 @@ def build_frame_visual_spec(
 
 
 def prompt_from_spec(spec: FrameVisualSpec, mode: str = "event_locked") -> str:
-    obj = ", ".join(unique(spec.required_objects, 6))
+    obj = ", ".join(unique(spec.required_objects, 8))
     identity = shorten(spec.subject_identity, 55)
-    sentence = shorten(spec.story_sentence, 34)
-    action = shorten(spec.primary_action or spec.visible_event, 20)
-    cause = shorten(spec.visible_cause, 20)
-    loc = shorten(spec.location, 12)
-    weather = shorten(spec.weather, 6)
-    atmosphere = shorten(spec.atmosphere, 10)
-    face = shorten(spec.facial_expression, 14)
-    body = shorten(spec.body_pose, 16)
-    camera = shorten(spec.camera, 16)
+    sentence = shorten(spec.story_sentence, 40)
+    action = shorten(spec.primary_action or spec.visible_event, 24)
+    cause = shorten(spec.visible_cause, 24)
+    loc = shorten(spec.location, 14)
+    weather = shorten(spec.weather, 8)
+    atmosphere = shorten(spec.atmosphere, 12)
+    face = shorten(spec.facial_expression, 16)
+    body = shorten(spec.body_pose, 18)
+    camera = shorten(spec.camera, 18)
+    continuity = shorten(spec.continuity, 50)
 
     base = (
         f"full-color cinematic storybook illustration. frame {spec.frame_id}/{spec.total_frames}. "
-        f"ONE SINGLE COHERENT SCENE, one moment only, not split-screen, not comic panels. "f"Use full-body or mostly full-body medium-wide composition, centered subject, safe margins, no cropping of head, face, paws, hands, or feet. "
-        f"EXACTLY ONE {spec.protagonist} in the whole image; no second {spec.protagonist}; no duplicate protagonist; no extra characters; no small secondary bear. "
-        f"subject identity anchor: {identity}. "
-        f"story sentence: {sentence}. "
-        f"main visible event/action: {action}. "
-        f"visible story cause/evidence: {cause}. "
-        f"allowed visual inventory only: {obj}. "
-        f"location: {loc}; weather: {weather}; atmosphere: {atmosphere}. "
-        f"emotion: {spec.emotion}; face: {face}; body pose: {body}. camera: {camera}. "
-        f"visible DCEE checklist: protagonist + current action + cause/evidence + required objects + background + emotion + uncropped full body. "
-        f"never show forbidden items: {', '.join(unique(spec.forbidden_objects, 12))}. "
+        f"Generate one single coherent scene only. "
+        f"Show exactly one {spec.protagonist}; no second protagonist and no extra characters. "
+        f"Keep the same protagonist identity as the input image: {identity}. "
+        f"Current story sentence: {sentence}. "
+        f"Main visible action: {action}. "
+        f"Visible cause or evidence: {cause}. "
+        f"Allowed grounded inventory only: {obj}. "
+        f"Location: {loc}; weather: {weather}; atmosphere: {atmosphere}. "
+        f"Emotion: {spec.emotion}; face: {face}; body pose: {body}. "
+        f"Camera/composition: {camera}. "
+        f"Continuity guidance: {continuity}. "
+        f"Prefer a readable medium or medium-wide story shot that clearly shows the protagonist, action, and evidence. "
+        f"Do not invent unrelated props or background objects. "
+        f"Do not turn continuity into duplicated subjects. "
     )
 
     if mode == "event_locked":
-        extra = "Prioritize the main action and visible event above background beauty. The action must be readable at first glance."
+        extra = "Prioritize the current event and the required grounded objects."
     elif mode == "evidence_locked":
-        extra = "Make the causal evidence and required objects large enough to see, with no unrelated objects."
+        extra = "Make the causal evidence clearly visible and easy to understand."
     elif mode == "emotion_causal_locked":
-        extra = f"The viewer must understand why the protagonist feels {spec.emotion} from the action and scene."
+        extra = f"Make the viewer understand why the protagonist feels {spec.emotion} from the scene."
     elif mode == "continuity_locked":
-        extra = "Keep the same subject identity and world continuity, but change pose to match the current event; do not copy earlier wrong layouts."
+        extra = "Keep identity and world continuity, but the pose and action must change to the current story step."
     else:
-        extra = "Use a clean composition that shows the protagonist, action, evidence, and background in one frame."
+        extra = "Keep the frame concrete, grounded, and easy to read."
     return clean(base + " " + extra)
 
 
 def negative_from_spec(spec: FrameVisualSpec) -> str:
     return clean(
-        "split screen, diptych, triptych, comic panel, storyboard sheet, collage, multiple scenes in one image, cropped head, cropped face, cropped feet, cut off body, partial body, out of frame, extreme close-up, "
-        "duplicate protagonist, second protagonist, two protagonists, two bears, multiple bears, extra bear, baby bear, bear cub, small bear, "
-        "extra character, extra animal, unrelated humans, human face, "
-        "generic portrait, repeated static pose, unrelated poster image, missing protagonist, wrong protagonist, wrong species, wrong fur color, "
-        "childlike body, different identity, inconsistent character, missing action, missing event, missing evidence, "
-        "missing required object, cropped out props, wrong background, wrong weather, unrelated object, unrelated prop, text, watermark, low quality, blurry, "
+        "split screen, diptych, triptych, comic panel, storyboard sheet, collage, multiple scenes in one image, "
+        "duplicate protagonist, second protagonist, extra character, extra animal, unrelated humans, human face, "
+        "wrong protagonist identity, wrong species, wrong fur color, different identity, "
+        "generic portrait, repeated static pose, missing protagonist, missing action, missing event, missing evidence, "
+        "missing required object, unrelated object, unrelated prop, text, watermark, low quality, blurry, "
         + spec.negative
     )

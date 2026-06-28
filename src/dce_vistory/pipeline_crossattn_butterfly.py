@@ -44,32 +44,27 @@ def _write_json(path: Path, obj: Any):
 
 
 
-def _clear_previous_visual_outputs(out_dir: Path):
-    """V25: avoid reading stale contact sheets or old candidate files from earlier runs."""
+
+def _clear_previous_visual_outputs(out_dir: Path, *dirs: Path):
+    """Remove stale generated outputs so a rerun does not reuse old contact sheets or candidate images."""
     out_dir = Path(out_dir)
-    targets = [
-        out_dir / "frames",
-        out_dir / "ending_candidates",
-    ]
-    patterns = ["frame_*_cand_*.png", "frame_*.png", "*.tmp.png"]
-    for folder in targets:
-        if not folder.exists():
+    for d in dirs:
+        d = Path(d)
+        if not d.exists():
             continue
-        for pattern in patterns:
-            for p in folder.glob(pattern):
+        for pattern in ["frame_*_cand_*.png", "frame_*.png", "*.tmp.png"]:
+            for p in d.glob(pattern):
                 try:
                     p.unlink()
                 except Exception:
                     pass
-    for name in ["contact_sheet.png", "candidate_manifest.json", "selected_images.json", "evaluation.json", "storyboard.json", "full_story.json"]:
-        try:
-            p = out_dir / name
-            if p.exists():
+    for name in ["contact_sheet.png", "candidate_manifest.json", "selected_images.json", "evaluation.json", "storyboard.json", "full_story.json", "full_story_partial.json", "storyboard_partial.json"]:
+        p = out_dir / name
+        if p.exists():
+            try:
                 p.unlink()
-        except Exception:
-            pass
-
-
+            except Exception:
+                pass
 def _image_path_exists(path: Any) -> bool:
     if not path:
         return False
@@ -79,7 +74,7 @@ def _image_path_exists(path: Any) -> bool:
         return False
 
 
-def _make_contact_sheet_force(image_paths: List[str], out_path: Path, cols: int = 3, thumb_size: tuple[int, int] = (384, 384), title: str = "DCEE-CausalVerse V21 Visual Story") -> str:
+def _make_contact_sheet_force(image_paths: List[str], out_path: Path, cols: int = 3, thumb_size: tuple[int, int] = (384, 384), title: str = "DCEE-CausalVerse Visual Story") -> str:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     valid_paths = [Path(str(p)) for p in image_paths if _image_path_exists(p)]
@@ -108,13 +103,18 @@ def _make_contact_sheet_force(image_paths: List[str], out_path: Path, cols: int 
 
 
 class CrossAttentionButterflyDCEViStoryPipeline:
-    """V21 grounded incremental DCEE pipeline.
+    """V26 grounded incremental DCEE pipeline.
 
-    Key V21 changes:
-    1) The input image is treated as a hard identity anchor.
-    2) Each frame is still generated with multiple candidates for selection, but every candidate must be a single-scene image.
-    3) Prompting is explicitly story-locked: exact sentence, exact event, exact must-show objects, exact background, and exact protagonist identity.
-    4) Previous selected frame continuity is injected into the current frame prompt.
+    Principle:
+    - Keep the stronger image quality behavior of V19/V20.
+    - Remove forced Training-Free/ConsiStory-style coupling that hurts story-image alignment.
+    - Use only safe consistency signals: input image identity anchor + previous sentence + previous selected image summary.
+
+    Main change:
+    sentence_1 -> frame_1 image
+    sentence_2 (conditioned on previous story + frame_1 summary) -> frame_2 image
+    ...
+    This keeps every sentence image-friendly and makes frame generation more aligned with the story.
     """
 
     def __init__(self, cfg: Dict[str, Any]):
@@ -140,7 +140,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         self.evaluator = DCEQAEvaluator(
             self.llm,
             self.vlm,
-            use_vlm=bool(ev_cfg.get("use_vlm", True)),
+            use_vlm=bool(ev_cfg.get("use_vlm", False)),
             save_contact_sheet=bool(ev_cfg.get("save_contact_sheet", True)),
         )
 
@@ -170,88 +170,18 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             evidence_tokens=int(ad_cfg.get("evidence_tokens", 8)),
         )
 
-    def _identity_prompts(self, seed) -> tuple[str, str]:
-        profiles = getattr(seed, "character_profiles", []) or []
-        main_profile = profiles[0] if profiles else None
-        pos = getattr(main_profile, "identity_anchor_prompt", "") or getattr(seed, "protagonist_identity_prompt", "")
-        neg = getattr(main_profile, "negative_identity_prompt", "") or getattr(seed, "protagonist_negative_identity_prompt", "")
-        return str(pos), str(neg)
-
-    def _world_prompt(self, seed, frame) -> str:
-        world_context = getattr(seed, "world_context", {}) or {}
-        if not isinstance(world_context, dict):
-            world_context = {}
-        parts = [
-            f"location: {getattr(frame, 'scene_location', '') or world_context.get('setting', '')}",
-            f"weather: {getattr(frame, 'weather', '') or world_context.get('weather', '')}",
-            f"time_of_day: {getattr(frame, 'time_of_day', '') or world_context.get('time_of_day', '')}",
-            f"background: {getattr(frame, 'environment_details', []) or world_context.get('background_objects', [])}",
-        ]
-        return "; ".join([str(x) for x in parts if str(x).strip()])
-
-    def _ground_packet_to_story_and_image(self, packet, frame, seed, previous_best: CandidateImage | None):
-        identity_pos, identity_neg = self._identity_prompts(seed)
-        protagonist_short = getattr(seed, "protagonist_visual_short", getattr(seed, "protagonist", "protagonist"))
-        source_image_path = getattr(seed, "source_image_path", "")
-        must_show = getattr(frame, "must_show", [])
-        bg = getattr(frame, "environment_details", [])
-        world_prompt = self._world_prompt(seed, frame)
-        prev_note = ""
-        if previous_best is not None:
-            prev_note = (
-                f"\n- Maintain continuity with the previous selected frame while updating the new action and emotion only."
-                f"\n- Previous selected frame image path: {getattr(previous_best, 'image_path', '')}"
-            )
-
-        packet.positive_prompt += (
-            "\n\nV25 DCEE STAGE + UNCROPPED EVENT-FRAME GROUNDING RULES:"
-            f"\n- Render ONE single coherent scene only; never use split panels or multiple moments."\
-            f"\n- Use centered full-body or mostly full-body composition with safe margins; do not crop head, face, paws, hands, feet, or required objects."
-            f"\n- ConsiStory-lite subject anchor: preserve only protagonist identity across frames; do not copy background/layout mistakes."\
-            f"\n- Render the SAME protagonist identity: {identity_pos}"
-            f"\n- Use the input image as a hard reference anchor. If the subject is {protagonist_short}, keep {protagonist_short} in this frame."
-            f"\n- Exact story sentence to render: {getattr(frame, 'story_sentence', '')}"
-            f"\n- Image-friendly rendering sentence: {getattr(frame, 'image_sentence', '')}"
-            f"\n- Exact event to show, with action visibly readable: {getattr(frame, 'event', '')}"
-            f"\n- Exact visible cause/evidence: {getattr(frame, 'event_grounding', '')}"
-            f"\n- Required visible objects only, no extra props: {must_show}"
-            f"\n- Background/world that must remain grounded: {world_prompt}"
-            f"\n- Emotion must be clearly readable: {getattr(frame, 'emotion', '')}; {getattr(frame, 'emotion_visual_rule', '')}"
-            f"\n- Keep all required environment/background elements visible when relevant: {bg}"
-            f"\n- Source input image path: {source_image_path}"
-            f"{prev_note}"\
-            f"\n- IMPORTANT: previous generated frames are text continuity only; do not copy any duplicate-subject artifact from them."
-        )
-        packet.negative_prompt += (
-            "; split screen; diptych; triptych; comic panel; storyboard sheet; collage; multiple moments in one frame"
-            "; extra character; extra animal; duplicated protagonist; no second protagonist; no duplicate protagonist; two bears; multiple bears; wrong protagonist identity; wrong species; wrong fur color; missing background"
-            "; missing required object; unrelated object; unrelated prop; generic portrait; wrong fur color; weak emotion"
-        )
-        if identity_neg:
-            packet.negative_prompt += f"; {identity_neg}"
-        for attr, value in {
-            "source_reference_image_path": source_image_path,
-            "reference_image_path": source_image_path,
-            "continuity_image_path": getattr(previous_best, 'image_path', '') if previous_best is not None else "",
-        }.items():
-            try:
-                setattr(packet, attr, value)
-            except Exception:
-                pass
-        return packet
-
-    def _strengthen_packet(self, packet, frame, seed, previous_best: CandidateImage | None):
-        packet = self._ground_packet_to_story_and_image(packet, frame, seed, previous_best)
+    def _strengthen_packet(self, packet, frame):
         packet.positive_prompt += (
             "\n\nRETRY CONTROL:"
-            f"\n- Make the story sentence visually obvious: {getattr(frame, 'story_sentence', '')}"
-            f"\n- Make the current event visually obvious: {getattr(frame, 'event', '')}"
-            f"\n- Show exact required objects clearly: {getattr(frame, 'must_show', [])}"
-            f"\n- Show exact protagonist identity clearly: {getattr(frame, 'character_reference_prompt', '')}"
-            f"\n- Show exact background and weather clearly: {getattr(frame, 'scene_location', '')}, {getattr(frame, 'weather', '')}, {getattr(frame, 'environment_details', [])}"
-            f"\n- Show target emotion clearly: {getattr(frame, 'emotion', '')}"
-            "\n- Use rich full color and a detailed but grounded background."
+            f"\n- Visualize EXACT sentence: {getattr(frame, 'story_sentence', '')}"
+            f"\n- Current event must be visually obvious: {getattr(frame, 'event', '')}"
+            f"\n- Required objects must be visible: {getattr(frame, 'must_show', [])}"
+            f"\n- Visible cause of emotion: {getattr(frame, 'event_grounding', '')}"
+            f"\n- Target emotion must be readable: {getattr(frame, 'emotion', '')}"
+            "\n- Keep the same protagonist identity as previous frames."
+            "\n- Use rich full color and a detailed background."
         )
+        packet.negative_prompt += "; generic portrait, missing required objects, wrong protagonist identity, empty background, weak action, weak emotion"
         return packet
 
     def _save_core_plan_outputs(self, out_dir: Path, seed, abstract, dce_plan, emotion_arc, full_story, storyboard):
@@ -270,7 +200,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         out_dir.mkdir(parents=True, exist_ok=True)
         frames_dir.mkdir(parents=True, exist_ok=True)
         ending_dir.mkdir(parents=True, exist_ok=True)
-        _clear_previous_visual_outputs(out_dir)
+        _clear_previous_visual_outputs(out_dir, frames_dir, ending_dir)
 
         run_errors: List[Dict[str, Any]] = []
         image_summary = self.image_understanding.analyze(sample.get("image_path"), sample)
@@ -278,30 +208,28 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         abstract = self.planner.generate_abstract(seed)
         dce_plan = self.planner.generate_dce_plan(seed, abstract)
         generation_policy = {
-            "version": "V25",
-            "mode": "dcee_stage_uncropped_event_grounded_selector",
+            "version": "V26",
+            "mode": "safe_consistency_grounded_incremental",
             "protagonist_only": True,
-            "single_scene_per_frame": True,
-            "multiple_candidates_for_selection": True,
-            "input_image_is_hard_identity_anchor": True,
-            "story_sentence_locked": True,
-            "previous_selected_frame_used_for_text_continuity": True,
-            "consistory_lite_subject_anchor": True,
-            "dcee_event_contract_per_frame": True,
-            "english_sdxl_visual_prompt": True,
-            "pairwise_vlm_candidate_selection": True,
-            "clear_stale_outputs_before_run": True,
-            "prompt_hash_seed_policy": True,
-            "uncropped_fullbody_composition": True,
-            "vlm_story_event_candidate_selector": True,
-            "previous_generated_images_not_used_as_ip_reference_by_default": True,
+            "no_secondary_characters": True,
+            "uses_input_image_identity_anchor": True,
+            "uses_previous_sentence_for_continuity": True,
+            "uses_previous_selected_image_summary_for_continuity": True,
+            "candidate_generation_preserved": True,
+            "pairwise_selector_disabled": True,
             "allowed_visual_elements": [
-                "protagonist", "protagonist props", "grounded background objects", "weather", "lighting", "emotion cues"
+                "protagonist",
+                "grounded protagonist props",
+                "grounded background objects",
+                "weather",
+                "lighting",
+                "emotion cues",
+                "visible event evidence"
             ],
             "blocked_story_entities": getattr(seed, "forbidden_ungrounded_entities", []),
-            "reason": "V25 adds DCEE stage scaffolding, uncropped full-body composition constraints, prompt-hash seed policy, stale-output cleanup, and stronger crop/duplicate penalties."
+            "reason": "V26 keeps the simpler V19/V20 story-image behavior, removes forced training-free consistency logic, and only adds safe grounding from the input image, previous story sentence, and previous selected image summary."
         }
-        _write_json(out_dir / "generation_policy_V25.json", generation_policy)
+        _write_json(out_dir / "generation_policy_V26.json", generation_policy)
         total_frames = int(sample.get("num_frames", 6))
         emotion_arc = self.planner.generate_emotion_arc(seed, abstract, dce_plan, total_frames)
 
@@ -319,6 +247,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         candidate_manifest: List[Dict[str, Any]] = []
         story_rows: List[Dict[str, Any]] = []
         storyboard: List[Any] = []
+        previous_image_summary: Dict[str, Any] | None = None
 
         img_cfg = self.cfg.get("image_generator", {})
         pipe_cfg = self.cfg.get("pipeline", {})
@@ -335,14 +264,13 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             style = "full-color " + style
 
         previous_frame = None
-        previous_best: CandidateImage | None = None
         for idx in range(total_frames):
             frame_id = idx + 1
             is_last = idx == total_frames - 1
             target_dir = ending_dir if is_last else frames_dir
             candidate_count = num_ending_candidates if is_last else num_candidates
 
-            story_step = self.planner.generate_story_step(seed, abstract, dce_plan, emotion_arc, story_rows, previous_frame, idx, total_frames)
+            story_step = self.planner.generate_story_step(seed, abstract, dce_plan, emotion_arc, story_rows, previous_frame, previous_image_summary, idx, total_frames)
             story_rows.append(story_step)
             frame = self.planner.story_step_to_frame(seed, dce_plan, emotion_arc, story_step, idx, total_frames)
             storyboard.append(frame)
@@ -368,7 +296,6 @@ class CrossAttentionButterflyDCEViStoryPipeline:
                 previous_frame=previous_frame,
                 anchors=anchors,
             )
-            packet = self._ground_packet_to_story_and_image(packet, frame, seed, previous_best)
 
             candidates = self.image_generator.generate_from_packet(packet=packet, frame_id=frame_id, out_dir=target_dir, num_candidates=candidate_count)
             ranked = self.evaluator.rerank_ending_candidates(frame, dce_plan, candidates) if is_last else self.evaluator.rank_frame_candidates(frame, dce_plan, candidates, is_ending=False)
@@ -383,7 +310,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
                 or best.scores.get("evidence_visibility", 0.0) < evidence_threshold
             ):
                 retried = True
-                strong_packet = self._strengthen_packet(packet, frame, seed, previous_best)
+                strong_packet = self._strengthen_packet(packet, frame)
                 retry_candidates = self.image_generator.generate_from_packet(packet=strong_packet, frame_id=frame_id, out_dir=target_dir, num_candidates=max(2, candidate_count))
                 retry_ranked = self.evaluator.rerank_ending_candidates(frame, dce_plan, retry_candidates) if is_last else self.evaluator.rank_frame_candidates(frame, dce_plan, retry_candidates, is_ending=False)
                 if retry_ranked and retry_ranked[0].scores.get("overall", 0.0) >= best.scores.get("overall", 0.0):
@@ -399,14 +326,25 @@ class CrossAttentionButterflyDCEViStoryPipeline:
                 memory.add(frame, best)
             except Exception as e:
                 run_errors.append({"stage": f"memory.add.frame_{frame_id}", "error": str(e), "traceback": traceback.format_exc()})
-            try:
-                setattr(frame, "selected_image_path", getattr(best, "image_path", ""))
-            except Exception:
-                pass
             previous_frame = frame
-            previous_best = best
+            try:
+                previous_image_summary_obj = self.image_understanding.analyze(getattr(best, "image_path", ""), {
+                    "text_prompt": getattr(frame, "story_sentence", ""),
+                    "protagonist": getattr(seed, "protagonist", "protagonist"),
+                    "target_ending_emotion": getattr(dce_plan, "target_ending_emotion", ""),
+                })
+                previous_image_summary = _safe_asdict(previous_image_summary_obj)
+            except Exception as e:
+                previous_image_summary = {
+                    "caption": getattr(frame, "story_sentence", ""),
+                    "objects": list(getattr(frame, "must_show", [])),
+                    "setting": getattr(frame, "scene_location", ""),
+                    "weather": getattr(frame, "weather", ""),
+                    "error": str(e),
+                }
+                run_errors.append({"stage": f"image_understanding.generated.frame_{frame_id}", "error": str(e), "traceback": traceback.format_exc()})
 
-            packet_log.append({"frame_id": frame_id, "packet": _safe_asdict(packet), "retried": retried})
+            packet_log.append({"frame_id": frame_id, "packet": _safe_asdict(packet), "retried": retried, "previous_image_summary_for_next_frame": previous_image_summary})
             memory_log.append({"frame_id": frame_id, "memory": _safe_asdict(selected_memory)})
             candidate_manifest.append({"frame_id": frame_id, "candidates": _safe_asdict(candidates), "selected": _safe_asdict(best)})
 
@@ -448,7 +386,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
             "storyboard": str(out_dir / "storyboard.json"),
             "full_story": str(out_dir / "full_story.json"),
             "dcee_plan": str(out_dir / "dcee_plan.json"),
-            "generation_policy_V23": str(out_dir / "generation_policy_V25.json"),
+            "generation_policy_V26": str(out_dir / "generation_policy_V26.json"),
             "has_contact_sheet": (out_dir / "contact_sheet.png").exists(),
             "num_selected_images": len(selected_images),
         })
@@ -482,13 +420,7 @@ class CrossAttentionButterflyDCEViStoryPipeline:
         ]
         for idx, row in enumerate(rows, 1):
             lines.append(f"{idx}. {row.get('sentence', '')}")
-        lines += [
-            "",
-            "## Emotion Arc\n",
-            f"- States: {' → '.join([str(x) for x in getattr(emotion_arc, 'states', [])])}",
-            f"- Intensities: {' → '.join([str(x) for x in getattr(emotion_arc, 'intensities', [])])}",
-            "",
-        ]
+        lines += ["", "## Emotion Arc\n", f"- States: {' → '.join([str(x) for x in getattr(emotion_arc, 'states', [])])}", f"- Intensities: {' → '.join([str(x) for x in getattr(emotion_arc, 'intensities', [])])}", ""]
         if evaluation.get("contact_sheet_path"):
             lines += ["## Contact Sheet\n", f"![Contact Sheet]({evaluation.get('contact_sheet_path')})", ""]
         lines.append("## Frames\n")
@@ -498,7 +430,6 @@ class CrossAttentionButterflyDCEViStoryPipeline:
                 f"### Frame {getattr(frame, 'frame_id', idx)}",
                 f"![Frame {getattr(frame, 'frame_id', idx)}]({getattr(image, 'image_path', '')})",
                 f"- Story sentence: {story_sentence}",
-                f"- Image sentence: {getattr(frame, 'image_sentence', '')}",
                 f"- Event: {getattr(frame, 'event', '')}",
                 f"- Event grounding: {getattr(frame, 'event_grounding', '')}",
                 f"- Emotion: {getattr(frame, 'emotion', '')} ({getattr(frame, 'emotion_intensity', '')}/5)",

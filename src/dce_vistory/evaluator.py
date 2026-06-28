@@ -109,7 +109,7 @@ def _make_contact_sheet_local(image_paths: List[str], out_path: Path, cols: int 
     header_h = 54
     canvas = Image.new("RGB", (cols * thumb_size[0], rows * thumb_size[1] + header_h), "white")
     draw = ImageDraw.Draw(canvas)
-    draw.text((12, 12), "DCEE-CausalVerse V25 Contact Sheet", fill=(0, 0, 0))
+    draw.text((12, 12), "DCEE-CausalVerse V26 Contact Sheet", fill=(0, 0, 0))
     for idx, p in enumerate(valid):
         img = Image.open(p).convert("RGB")
         img.thumbnail((thumb_size[0] - 20, thumb_size[1] - 44))
@@ -407,7 +407,7 @@ Return JSON only:
                     scores["action_missing_penalty"] = max(scores["action_missing_penalty"], 0.35)
                     scores["event_alignment"] = min(scores["event_alignment"], 0.35)
 
-                c.notes["v25_vlm_judgment"] = vlm_scores
+                c.notes["v26_vlm_judgment"] = vlm_scores
                 c.notes["vlm_reason"] = vlm_scores.get("reason", "")
             elif vlm_scores and "vlm_error" in vlm_scores:
                 c.notes["vlm_error"] = vlm_scores["vlm_error"]
@@ -415,18 +415,18 @@ Return JSON only:
             overall = (
                 0.010 * scores["image_quality"]
                 + 0.005 * scores["colorfulness"]
-                + 0.170 * scores["identity_consistency"]
-                + 0.220 * scores["story_alignment"]
-                + 0.215 * scores["event_alignment"]
-                + 0.145 * scores["event_grounding"]
-                + 0.130 * scores["evidence_visibility"]
+                + 0.185 * scores["identity_consistency"]
+                + 0.250 * scores["story_alignment"]
+                + 0.235 * scores["event_alignment"]
+                + 0.160 * scores["event_grounding"]
+                + 0.135 * scores["evidence_visibility"]
                 + 0.070 * scores["emotion_visibility"]
-                + 0.055 * scores["emotion_cause_visibility"]
-                + 0.035 * scores["scene_alignment"]
+                + 0.045 * scores["emotion_cause_visibility"]
+                + 0.025 * scores["scene_alignment"]
                 + 0.040 * scores["continuity"]
-                + 0.050 * scores["single_scene_score"]
-                + 0.050 * scores["full_body_visibility"]
-                + 0.025 * scores["qa_score"]
+                + 0.025 * scores["single_scene_score"]
+                + 0.015 * scores["full_body_visibility"]
+                + 0.015 * scores["qa_score"]
                 + scores["variant_priority"]
                 - scores["duplicate_penalty"]
                 - scores["action_missing_penalty"]
@@ -438,8 +438,9 @@ Return JSON only:
 
             scores["overall"] = round(float(overall), 4)
             c.scores.update(scores)
-            c.notes["v25_selection_reason"] = {
+            c.notes["v26_selection_reason"] = {
                 "story_first_selection": True,
+                "pairwise_selector_disabled": True,
                 "event_action_evidence_first": True,
                 "image_quality_weight_minimal": True,
                 "variant_priority": scores["variant_priority"],
@@ -453,8 +454,9 @@ Return JSON only:
             ranked.append(c)
 
         ranked = sorted(ranked, key=lambda x: x.scores.get("overall", 0.0), reverse=True)
+        # V26: disable the pairwise VLM override. In practice it sometimes overrode the better V19/V20-like candidate.
+        return ranked
 
-        # V24: final pairwise VLM selector, if available, can override close/incorrect scoring.
         pairwise = self._vlm_pairwise_select(frame, ranked, is_ending=is_ending)
         if pairwise and "vlm_pairwise_error" not in pairwise:
             try:
