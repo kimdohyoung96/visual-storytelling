@@ -1,0 +1,12 @@
+{
+  "text_prompt": "A white bear enters a deep forest and loses his jar. He later finds the lost jar at a lake in the forest.",
+  "protagonist": "white bear",
+  "target_ending_emotion": "happy",
+  "genre": "adventure",
+  "style": "illustration",
+  "num_frames": 6,
+  "language": "English",
+  "signature_items": [
+    "honey jar"
+  ]
+}
