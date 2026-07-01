@@ -1,0 +1,83 @@
+# DCEE-CausalVerse V41.1 text-only seed hotfix config
+# Goal: much stronger story-to-image grounding for text-only inputs.
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  temperature: 0.28
+  max_tokens: 1800
+
+vlm:
+  provider: openai
+  model: gpt-4o-mini
+  temperature: 0.0
+  max_tokens: 900
+
+image_understanding:
+  provider: llm_caption
+  caption_model: Salesforce/blip-image-captioning-base
+
+image_generator:
+  provider: sdxl_crossattn
+  model_id: stabilityai/stable-diffusion-xl-base-1.0
+  device: cuda
+  width: 896
+  height: 896
+  num_inference_steps: 40
+  guidance_scale: 8.2
+  num_candidates_per_frame: 4
+  num_ending_candidates: 5
+  seed: 42
+  enable_cpu_offload: false
+
+  # V41 text-only test: do not let any image reference interfere.
+  use_ip_adapter: false
+  ip_adapter_scale: 0.0
+  canonical_reference_sheet_path: ""
+  identity_backend_priority: ["text"]
+  protagonist_reference_paths: []
+
+  use_character_lora: false
+  character_lora_path: ""
+  character_lora_scale: 0.85
+
+  use_instantid: false
+  instantid_adapter_path: ""
+  instantid_controlnet_path: ""
+
+  use_photomaker: false
+  photomaker_adapter_path: ""
+
+  use_subject_scene_fusion: false
+  subject_scene_fusion_scale: 0.72
+  subject_scene_fusion_first_n: 0
+
+cross_attention_adapters:
+  character_tokens: 8
+  world_tokens: 8
+  emotion_tokens: 8
+  event_tokens: 8
+  evidence_tokens: 8
+
+butterfly:
+  num_hypotheses: 3
+  quality_suffix: "full-color cinematic storybook illustration, readable background, explicit noun grounding, stable protagonist identity, clear action and scene progression"
+  negative_prompt: "blank background, plain background, icon, mascot, sticker, duplicate protagonist, extra animal, extra human, unrelated prop, book, vehicle, missing key object, missing environment, close-up only, cropped body"
+
+pipeline:
+  memory_strategy: adaptive_causal
+  emotion_retry: true
+  emotion_visibility_threshold: 0.72
+  colorfulness_threshold: 0.34
+  event_grounding_threshold: 0.80
+  evidence_visibility_threshold: 0.80
+  story_alignment_threshold: 0.86
+  background_presence_threshold: 0.62
+  progression_threshold: 0.56
+  critical_noun_coverage_threshold: 0.78
+  progression_consistency_threshold: 0.57
+  story_context_alignment_threshold: 0.60
+
+evaluation:
+  use_vlm: false
+  save_contact_sheet: true
