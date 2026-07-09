@@ -1,0 +1,15 @@
+{
+  "text_prompt": "A white bear loses his honey jar in a deep forest, searches anxiously through dense underbrush, reaches a serene lake, sees the honey jar at the water's edge, retrieves it, and joyfully enjoys honey beside the lake.",
+  "protagonist": "white bear",
+  "signature_items": [
+    "honey jar"
+  ],
+  "target_ending_emotion": "joyful",
+  "style": "storybook illustration",
+  "genre": "adventure",
+  "num_frames": 6,
+  "language": "English",
+  "image_path": "",
+  "protagonist_reference_paths": [],
+  "canonical_reference_sheet_path": ""
+}
